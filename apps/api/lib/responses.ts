@@ -6,6 +6,13 @@ export const apiMeta = (requestId: string) => ({
   timestamp: new Date().toISOString()
 });
 
+export const corsHeaders = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET,OPTIONS",
+  "access-control-allow-headers": "content-type,x-request-id",
+  "cache-control": "no-store"
+};
+
 export const ok = <TData>(data: TData, requestId: string, init?: ResponseInit) => {
   const payload: ApiSuccess<TData> = {
     ok: true,
@@ -13,7 +20,13 @@ export const ok = <TData>(data: TData, requestId: string, init?: ResponseInit) =
     meta: apiMeta(requestId)
   };
 
-  return NextResponse.json(payload, init);
+  return NextResponse.json(payload, {
+    ...init,
+    headers: {
+      ...corsHeaders,
+      ...init?.headers
+    }
+  });
 };
 
 export const fail = (
@@ -33,7 +46,13 @@ export const fail = (
     meta: apiMeta(requestId)
   };
 
-  return NextResponse.json(payload, init);
+  return NextResponse.json(payload, {
+    ...init,
+    headers: {
+      ...corsHeaders,
+      ...init.headers
+    }
+  });
 };
 
 export const notImplemented = (

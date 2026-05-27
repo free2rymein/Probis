@@ -23,7 +23,7 @@ export type ApiResponse<TData> = ApiSuccess<TData> | ApiError;
 
 export type Severity = "neutral" | "low" | "medium" | "high" | "critical";
 
-export type MarketStatus = "open" | "closed" | "settled" | "paused";
+export type MarketStatus = "draft" | "open" | "paused" | "closed" | "settled" | "cancelled";
 
 export type Market = {
   id: string;
@@ -35,6 +35,62 @@ export type Market = {
   volumeUsd: number;
   liquidityUsd: number;
   updatedAt: string;
+};
+
+export type MarketListItem = {
+  id: string;
+  slug: string;
+  title: string;
+  source: string;
+  category: string;
+  status: MarketStatus;
+  probability: number | null;
+  volume24h: number;
+  liquidity: number | null;
+  latestAggregateBucket: string | null;
+  updatedAt: string;
+};
+
+export type PaginatedResponse<TItem> = {
+  items: TItem[];
+  pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+    nextOffset: number | null;
+  };
+};
+
+export type DashboardMetrics = {
+  trackedMarketCount: number;
+  openMarketCount: number;
+  activeIngestionCount: number;
+  recentTradeThroughput1m: number;
+  recentTradeThroughput5m: number;
+  aggregateMarketsUpdated5m: number;
+  latestAggregateBucket: string | null;
+  recentTimelineEvents1h: number;
+  ingestionHealth: "healthy" | "stale" | "idle";
+};
+
+export type AggregatePoint = {
+  marketId: string;
+  bucket: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  tradeCount: number;
+};
+
+export type TimelineListItem = {
+  id: string;
+  marketId: string;
+  eventType: string;
+  eventTimestamp: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
 };
 
 export type Wallet = {
