@@ -28,6 +28,20 @@ services:
       - postgres
       - redis
 
+  workers:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/workers.Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/probis
+      REDIS_URL: redis://redis:6379
+      WORKER_MODE: ${WORKER_MODE:-mock}
+      POLYMARKET_GAMMA_API_URL: ${POLYMARKET_GAMMA_API_URL:-https://gamma-api.polymarket.com}
+      POLYMARKET_CLOB_API_URL: ${POLYMARKET_CLOB_API_URL:-https://clob.polymarket.com}
+    depends_on:
+      - postgres
+      - redis
+
   postgres:
     image: postgres:16-alpine
     environment:

@@ -1,1 +1,0 @@
-"""Probis worker package."""
