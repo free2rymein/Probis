@@ -1,0 +1,11 @@
+{
+  "name": "@probis/workers",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "python -m src.main",
+    "build": "python -m py_compile src/main.py",
+    "lint": "python -m py_compile src/main.py",
+    "typecheck": "python -m py_compile src/main.py"
+  }
+}
