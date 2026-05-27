@@ -13,6 +13,7 @@ type MarketRow = {
   status: MarketListItem["status"];
   probability: string | null;
   volume_24h: string | null;
+  liquidity: string | null;
   latest_aggregate_bucket: Date | null;
   updated_at: Date;
   total_count: string;
@@ -23,7 +24,7 @@ const orderClause = (sql: ReturnType<typeof getSql>, sort: string, direction: "a
 
   if (sort === "title") return sql`m.title ${dir}`;
   if (sort === "status") return sql`m.status ${dir}, m.updated_at DESC`;
-  if (sort === "volume") return sql`COALESCE(rv.volume_24h, 0) ${dir}, m.updated_at DESC`;
+  if (sort === "volume") return sql`COALESCE(volume_24h.value, 0) ${dir}, m.updated_at DESC`;
   if (sort === "probability") return sql`latest.close ${dir} NULLS LAST, m.updated_at DESC`;
   return sql`m.updated_at ${dir}`;
 };
@@ -34,22 +35,6 @@ export const GET = withApiHandler(async (request, { requestId }) => {
   const sql = getSql();
 
   const rows = await sql<MarketRow[]>`
-    WITH recent_volume AS (
-      SELECT
-        market_id,
-        SUM(volume)::text AS volume_24h
-      FROM market_aggregates_1m
-      WHERE bucket >= now() - interval '24 hours'
-      GROUP BY market_id
-    ),
-    latest AS (
-      SELECT DISTINCT ON (market_id)
-        market_id,
-        close,
-        bucket
-      FROM market_aggregates_1m
-      ORDER BY market_id, bucket DESC
-    )
     SELECT
       m.id,
       m.slug,
@@ -58,13 +43,25 @@ export const GET = withApiHandler(async (request, { requestId }) => {
       m.category,
       m.status::text AS status,
       latest.close::text AS probability,
-      rv.volume_24h,
+      volume_24h.value::text AS volume_24h,
+      NULLIF(to_jsonb(m)->>'liquidity', '') AS liquidity,
       latest.bucket AS latest_aggregate_bucket,
       m.updated_at,
       COUNT(*) OVER()::text AS total_count
     FROM markets m
-    LEFT JOIN recent_volume rv ON rv.market_id = m.id
-    LEFT JOIN latest ON latest.market_id = m.id
+    LEFT JOIN LATERAL (
+      SELECT a.close, a.bucket
+      FROM market_aggregates_1m a
+      WHERE a.market_id = m.id
+      ORDER BY a.bucket DESC
+      LIMIT 1
+    ) latest ON true
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(SUM(a.volume), 0) AS value
+      FROM market_aggregates_1m a
+      WHERE a.market_id = m.id
+        AND a.bucket >= now() - interval '24 hours'
+    ) volume_24h ON true
     WHERE
       (${search}::text IS NULL OR m.title ILIKE ${search} OR m.slug ILIKE ${search})
       AND (${query.status ?? null}::market_status IS NULL OR m.status = ${query.status ?? null}::market_status)
@@ -86,7 +83,7 @@ export const GET = withApiHandler(async (request, { requestId }) => {
       status: row.status,
       probability: row.probability === null ? null : Number(row.probability),
       volume24h: Number(row.volume_24h ?? 0),
-      liquidity: null,
+      liquidity: row.liquidity === null ? null : Number(row.liquidity),
       latestAggregateBucket: row.latest_aggregate_bucket?.toISOString() ?? null,
       updatedAt: row.updated_at.toISOString()
     })),

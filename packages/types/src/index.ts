@@ -67,8 +67,10 @@ export type DashboardMetrics = {
   activeIngestionCount: number;
   recentTradeThroughput1m: number;
   recentTradeThroughput5m: number;
+  volume24h: number;
   aggregateMarketsUpdated5m: number;
   latestAggregateBucket: string | null;
+  latestMarketUpdate: string | null;
   recentTimelineEvents1h: number;
   ingestionHealth: "healthy" | "stale" | "idle";
 };

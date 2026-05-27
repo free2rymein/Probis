@@ -2,7 +2,7 @@
 
 import { Activity, AlertCircle, Clock, Database, Radio, TrendingUp } from "lucide-react";
 import { Badge, Card, CardContent, CardHeader, CardTitle, EmptyState, Skeleton } from "@probis/ui";
-import { formatCompactNumber } from "@probis/shared";
+import { formatCompactNumber, formatUsd } from "@probis/shared";
 import { useDashboardMetrics, useTimeline } from "@/lib/api/hooks";
 
 const healthVariant = {
@@ -38,6 +38,9 @@ export function DashboardClient() {
   const latestAggregate = metrics.latestAggregateBucket
     ? new Date(metrics.latestAggregateBucket).toLocaleTimeString()
     : "none";
+  const latestMarketUpdate = metrics.latestMarketUpdate
+    ? new Date(metrics.latestMarketUpdate).toLocaleTimeString()
+    : "none";
 
   const cards = [
     {
@@ -51,8 +54,8 @@ export function DashboardClient() {
       icon: Radio
     },
     {
-      label: "Trades / 1m",
-      value: formatCompactNumber(metrics.recentTradeThroughput1m),
+      label: "Volume / 24h",
+      value: formatUsd(metrics.volume24h),
       icon: TrendingUp
     },
     {
@@ -104,11 +107,21 @@ export function DashboardClient() {
               </span>
             </div>
             <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Trades / 1m</span>
+              <span className="font-mono">
+                {formatCompactNumber(metrics.recentTradeThroughput1m)}
+              </span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground flex items-center gap-2">
                 <Clock className="h-4 w-4" />
                 Latest aggregate
               </span>
               <span className="font-mono">{latestAggregate}</span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Latest market update</span>
+              <span className="font-mono">{latestMarketUpdate}</span>
             </div>
           </CardContent>
         </Card>

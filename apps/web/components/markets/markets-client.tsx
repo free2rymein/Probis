@@ -164,17 +164,17 @@ export function MarketsClient() {
           <Skeleton className="h-72" />
         </div>
       ) : markets.data?.items.length ? (
-        <div className="border-border overflow-hidden rounded-lg border">
+        <div className="border-border bg-background overflow-hidden rounded-lg border">
           <Table>
-            <TableHeader className="bg-card sticky top-14 z-10">
-              <TableRow>
-                <TableHead>Market</TableHead>
-                <TableHead>Venue</TableHead>
-                <TableHead>Probability</TableHead>
-                <TableHead>Volume 24h</TableHead>
-                <TableHead>Liquidity</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Updated</TableHead>
+            <TableHeader className="border-border sticky top-0 z-30 border-b bg-[#090d14] shadow-[0_1px_0_hsl(var(--border))] [&_th]:bg-[#090d14]">
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="bg-[#090d14]">Market</TableHead>
+                <TableHead className="bg-[#090d14]">Venue</TableHead>
+                <TableHead className="bg-[#090d14]">Probability</TableHead>
+                <TableHead className="bg-[#090d14]">Volume 24h</TableHead>
+                <TableHead className="bg-[#090d14]">Liquidity</TableHead>
+                <TableHead className="bg-[#090d14]">Status</TableHead>
+                <TableHead className="bg-[#090d14]">Updated</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

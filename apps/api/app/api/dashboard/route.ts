@@ -9,8 +9,10 @@ type DashboardRow = {
   active_ingestion_count: string;
   recent_trade_throughput_1m: string | null;
   recent_trade_throughput_5m: string | null;
+  volume_24h: string | null;
   aggregate_markets_updated_5m: string;
   latest_aggregate_bucket: Date | null;
+  latest_market_update: Date | null;
   recent_timeline_events_1h: string;
 };
 
@@ -30,12 +32,17 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
         COUNT(DISTINCT source)::text AS active_ingestion_count
       FROM markets
     ),
+    market_freshness AS (
+      SELECT MAX(updated_at) AS latest_market_update
+      FROM markets
+    ),
     aggregate_stats AS (
       SELECT
         COALESCE(SUM(trade_count) FILTER (WHERE bucket >= now() - interval '1 minute'), 0)::text
           AS recent_trade_throughput_1m,
         COALESCE(SUM(trade_count) FILTER (WHERE bucket >= now() - interval '5 minutes'), 0)::text
           AS recent_trade_throughput_5m,
+        COALESCE(SUM(volume), 0)::text AS volume_24h,
         COUNT(DISTINCT market_id) FILTER (WHERE bucket >= now() - interval '5 minutes')::text
           AS aggregate_markets_updated_5m,
         MAX(bucket) AS latest_aggregate_bucket
@@ -48,7 +55,7 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
       WHERE event_timestamp >= now() - interval '1 hour'
     )
     SELECT *
-    FROM market_counts, aggregate_stats, timeline_stats
+    FROM market_counts, market_freshness, aggregate_stats, timeline_stats
   `;
 
   const latestBucket = row?.latest_aggregate_bucket ?? null;
@@ -58,8 +65,10 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
     activeIngestionCount: Number(row?.active_ingestion_count ?? 0),
     recentTradeThroughput1m: Number(row?.recent_trade_throughput_1m ?? 0),
     recentTradeThroughput5m: Number(row?.recent_trade_throughput_5m ?? 0),
+    volume24h: Number(row?.volume_24h ?? 0),
     aggregateMarketsUpdated5m: Number(row?.aggregate_markets_updated_5m ?? 0),
     latestAggregateBucket: latestBucket?.toISOString() ?? null,
+    latestMarketUpdate: row?.latest_market_update?.toISOString() ?? null,
     recentTimelineEvents1h: Number(row?.recent_timeline_events_1h ?? 0),
     ingestionHealth: healthFromBucket(latestBucket)
   };
