@@ -71,6 +71,9 @@ export type DashboardMetrics = {
   aggregateMarketsUpdated5m: number;
   latestAggregateBucket: string | null;
   latestMarketUpdate: string | null;
+  openSignalsCount: number;
+  highSeveritySignalsCount: number;
+  latestAnomalyTimestamp: string | null;
   recentTimelineEvents1h: number;
   ingestionHealth: "healthy" | "stale" | "idle";
 };
@@ -118,6 +121,20 @@ export type Signal = {
   confidence: number;
   observedAt: string;
   source: string;
+};
+
+export type AnomalySignal = {
+  id: string;
+  marketId: string;
+  marketTitle: string;
+  anomalyType: string;
+  severityScore: number;
+  confidenceScore: number;
+  summary: string;
+  walletAddresses: string[];
+  metadata: Record<string, unknown>;
+  detectedAt: string;
+  createdAt: string;
 };
 
 export type TimelineEvent = {

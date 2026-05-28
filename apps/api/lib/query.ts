@@ -28,5 +28,13 @@ export const timelineQuerySchema = paginationQuerySchema.extend({
     .optional()
 });
 
+export const signalsQuerySchema = paginationQuerySchema.extend({
+  anomalyType: z.string().trim().min(1).max(64).optional(),
+  minSeverity: z.coerce.number().min(0).max(100).optional(),
+  lookbackHours: z.coerce.number().int().min(1).max(720).default(168),
+  sort: z.enum(["severity_score", "detected_at"]).default("severity_score"),
+  direction: z.enum(["asc", "desc"]).default("desc")
+});
+
 export const queryObject = (request: Request) =>
   Object.fromEntries(new URL(request.url).searchParams.entries());

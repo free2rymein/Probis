@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import { config as loadEnv } from "dotenv";
 import { loadWorkerConfig } from "./config/env";
 import { MarketDiscoveryService } from "./ingestion/market-discovery";
+import { createIntelligenceConfig } from "./intelligence/config";
+import { IntelligenceEngine } from "./intelligence/engine";
 import { TradeIngestionWorker } from "./ingestion/trade-ingestion";
 import { RealtimeEventBus } from "./realtime/event-bus";
 import { createWorkerRepositories } from "./repositories";
@@ -36,11 +38,16 @@ if (config.WORKER_MODE === "mock") {
 
 const marketDiscovery = new MarketDiscoveryService(config, repositories);
 const tradeIngestion = new TradeIngestionWorker(config, repositories, bus);
+const intelligenceEngine = new IntelligenceEngine(
+  createIntelligenceConfig(config),
+  repositories.intelligence
+);
 
 const shutdown = async () => {
   logger.warn("workers.shutdown", {});
   marketDiscovery.stop();
   tradeIngestion.stop();
+  intelligenceEngine.stop();
   await close();
   process.exit(0);
 };
@@ -52,7 +59,9 @@ logger.info("workers.start", {
   mode: config.WORKER_MODE,
   tradeBatchSize: config.TRADE_BATCH_SIZE,
   tradeFlushIntervalMs: config.TRADE_FLUSH_INTERVAL_MS,
-  aggregateFlushIntervalMs: config.AGGREGATE_FLUSH_INTERVAL_MS
+  aggregateFlushIntervalMs: config.AGGREGATE_FLUSH_INTERVAL_MS,
+  intelligenceEnabled: config.INTELLIGENCE_ENABLED,
+  intelligenceIntervalMs: config.INTELLIGENCE_INTERVAL_MS
 });
 
-await Promise.all([marketDiscovery.run(), tradeIngestion.run()]);
+await Promise.all([marketDiscovery.run(), tradeIngestion.run(), intelligenceEngine.run()]);

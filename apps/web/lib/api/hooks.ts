@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type {
   AggregatePoint,
+  AnomalySignal,
   DashboardMetrics,
   MarketListItem,
   PaginatedResponse,
@@ -19,11 +20,22 @@ export type MarketsQuery = {
   direction?: "asc" | "desc";
 };
 
+export type SignalsQuery = {
+  limit: number;
+  offset: number;
+  anomalyType?: string;
+  minSeverity?: number;
+  lookbackHours?: number;
+  sort?: "severity_score" | "detected_at";
+  direction?: "asc" | "desc";
+};
+
 export const REFRESH_INTERVALS = {
   dashboard: 15_000,
   markets: 30_000,
   aggregates: 20_000,
-  timeline: 20_000
+  timeline: 20_000,
+  signals: 20_000
 } as const;
 
 export function useDashboardMetrics() {
@@ -60,5 +72,15 @@ export function useTimeline(limit = 20) {
     queryFn: ({ signal }) =>
       apiGet<PaginatedResponse<TimelineListItem>>("/api/timeline", { limit, offset: 0 }, signal),
     refetchInterval: REFRESH_INTERVALS.timeline
+  });
+}
+
+export function useSignals(query: SignalsQuery) {
+  return useQuery({
+    queryKey: ["signals", query],
+    queryFn: ({ signal }) =>
+      apiGet<PaginatedResponse<AnomalySignal>>("/api/signals", query, signal),
+    placeholderData: (previous) => previous,
+    refetchInterval: REFRESH_INTERVALS.signals
   });
 }

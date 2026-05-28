@@ -25,7 +25,10 @@ export const anomalyTypeEnum = pgEnum("anomaly_type", [
   "wallet_cluster",
   "timeline_discontinuity",
   "narrative_correlation",
-  "price_dislocation"
+  "price_dislocation",
+  "probability_shock",
+  "activity_burst",
+  "whale_activity"
 ]);
 
 export const timelineEventTypeEnum = pgEnum("timeline_event_type", [

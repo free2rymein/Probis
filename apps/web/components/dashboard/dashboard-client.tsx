@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, AlertCircle, Clock, Database, Radio, TrendingUp } from "lucide-react";
+import { AlertCircle, BellRing, Clock, Database, Radio, TrendingUp } from "lucide-react";
 import { Badge, Card, CardContent, CardHeader, CardTitle, EmptyState, Skeleton } from "@probis/ui";
 import { formatCompactNumber, formatUsd } from "@probis/shared";
 import { useDashboardMetrics, useTimeline } from "@/lib/api/hooks";
@@ -41,6 +41,9 @@ export function DashboardClient() {
   const latestMarketUpdate = metrics.latestMarketUpdate
     ? new Date(metrics.latestMarketUpdate).toLocaleTimeString()
     : "none";
+  const latestAnomaly = metrics.latestAnomalyTimestamp
+    ? new Date(metrics.latestAnomalyTimestamp).toLocaleTimeString()
+    : "none";
 
   const cards = [
     {
@@ -59,9 +62,9 @@ export function DashboardClient() {
       icon: TrendingUp
     },
     {
-      label: "Timeline / 1h",
-      value: formatCompactNumber(metrics.recentTimelineEvents1h),
-      icon: Activity
+      label: "Signals / 24h",
+      value: formatCompactNumber(metrics.openSignalsCount),
+      icon: BellRing
     }
   ] as const;
 
@@ -101,6 +104,12 @@ export function DashboardClient() {
               <span className="font-mono">{formatCompactNumber(metrics.openMarketCount)}</span>
             </div>
             <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">High severity / 24h</span>
+              <span className="font-mono">
+                {formatCompactNumber(metrics.highSeveritySignalsCount)}
+              </span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">Trades / 5m</span>
               <span className="font-mono">
                 {formatCompactNumber(metrics.recentTradeThroughput5m)}
@@ -122,6 +131,16 @@ export function DashboardClient() {
             <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">Latest market update</span>
               <span className="font-mono">{latestMarketUpdate}</span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Latest anomaly</span>
+              <span className="font-mono">{latestAnomaly}</span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Timeline / 1h</span>
+              <span className="font-mono">
+                {formatCompactNumber(metrics.recentTimelineEvents1h)}
+              </span>
             </div>
           </CardContent>
         </Card>

@@ -13,6 +13,9 @@ type DashboardRow = {
   aggregate_markets_updated_5m: string;
   latest_aggregate_bucket: Date | null;
   latest_market_update: Date | null;
+  open_signals_count: string;
+  high_severity_signals_count: string;
+  latest_anomaly_timestamp: Date | null;
   recent_timeline_events_1h: string;
 };
 
@@ -53,9 +56,17 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
       SELECT COUNT(*)::text AS recent_timeline_events_1h
       FROM market_timeline
       WHERE event_timestamp >= now() - interval '1 hour'
+    ),
+    anomaly_stats AS (
+      SELECT
+        COUNT(*)::text AS open_signals_count,
+        COUNT(*) FILTER (WHERE severity_score >= 75)::text AS high_severity_signals_count,
+        MAX(detected_at) AS latest_anomaly_timestamp
+      FROM anomaly_events
+      WHERE detected_at >= now() - interval '24 hours'
     )
     SELECT *
-    FROM market_counts, market_freshness, aggregate_stats, timeline_stats
+    FROM market_counts, market_freshness, aggregate_stats, timeline_stats, anomaly_stats
   `;
 
   const latestBucket = row?.latest_aggregate_bucket ?? null;
@@ -69,6 +80,9 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
     aggregateMarketsUpdated5m: Number(row?.aggregate_markets_updated_5m ?? 0),
     latestAggregateBucket: latestBucket?.toISOString() ?? null,
     latestMarketUpdate: row?.latest_market_update?.toISOString() ?? null,
+    openSignalsCount: Number(row?.open_signals_count ?? 0),
+    highSeveritySignalsCount: Number(row?.high_severity_signals_count ?? 0),
+    latestAnomalyTimestamp: row?.latest_anomaly_timestamp?.toISOString() ?? null,
     recentTimelineEvents1h: Number(row?.recent_timeline_events_1h ?? 0),
     ingestionHealth: healthFromBucket(latestBucket)
   };

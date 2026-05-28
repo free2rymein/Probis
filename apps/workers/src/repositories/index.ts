@@ -3,10 +3,12 @@ import { createAggregatesRepository } from "./aggregates";
 import { createMarketsRepository } from "./markets";
 import { createTimelineRepository } from "./timeline";
 import { createTradesRepository } from "./trades";
+import { createIntelligenceRepository } from "../intelligence/repositories/intelligence-repository";
 
 export const createWorkerRepositories = (db: ProbisDatabase) => ({
   markets: createMarketsRepository(db),
   trades: createTradesRepository(db),
   aggregates: createAggregatesRepository(db),
-  timeline: createTimelineRepository(db)
+  timeline: createTimelineRepository(db),
+  intelligence: createIntelligenceRepository(db)
 });

@@ -219,7 +219,10 @@ export type Database = {
         | "wallet_cluster"
         | "timeline_discontinuity"
         | "narrative_correlation"
-        | "price_dislocation";
+        | "price_dislocation"
+        | "probability_shock"
+        | "activity_burst"
+        | "whale_activity";
       timeline_event_type:
         | "trade"
         | "aggregate"
