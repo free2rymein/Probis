@@ -8,6 +8,12 @@ export const createMockMarket = (): NormalizedMarket => ({
   description: "Local deterministic market used for worker development.",
   category: "development",
   status: "open",
+  conditionId: "mock-condition-1",
+  clobTokenIds: ["mock-token-yes"],
+  currentProbability: "0.5",
+  volume24h: null,
+  liquidity: null,
+  metadata: { mode: "mock" },
   resolutionDate: null
 });
 
@@ -25,6 +31,9 @@ export const createMockTrade = (marketId: string): NormalizedTrade => {
     quantity,
     usdValue: (Number(price) * Number(quantity)).toFixed(4),
     transactionHash: `mock-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    clobTokenId: "mock-token-yes",
+    outcome: "Yes",
+    metadata: { mode: "mock" },
     tradeTimestamp: new Date()
   };
 };

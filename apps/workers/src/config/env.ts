@@ -7,8 +7,14 @@ export const workerConfigSchema = z.object({
   POLYMARKET_GAMMA_API_URL: z.string().url().default("https://gamma-api.polymarket.com"),
   POLYMARKET_CLOB_API_URL: z.string().url().default("https://clob.polymarket.com"),
   POLYMARKET_WS_URL: z.string().url().optional(),
+  MARKET_SYNC_LIMIT: z.coerce.number().int().min(1).max(1_000).default(250),
+  MARKET_SYNC_ACTIVE_ONLY: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  TRADE_POLL_LIMIT: z.coerce.number().int().min(1).max(2_000).default(500),
   MARKET_DISCOVERY_INTERVAL_MS: z.coerce.number().int().min(10_000).default(180_000),
-  TRADE_POLL_INTERVAL_MS: z.coerce.number().int().min(1_000).default(5_000),
+  TRADE_POLL_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
   TRADE_BATCH_SIZE: z.coerce.number().int().min(1).max(5_000).default(500),
   TRADE_FLUSH_INTERVAL_MS: z.coerce.number().int().min(250).default(2_000),
   AGGREGATE_FLUSH_INTERVAL_MS: z.coerce.number().int().min(500).default(2_500),
@@ -26,6 +32,14 @@ export const workerConfigSchema = z.object({
   ACTIVITY_SPIKE_MULTIPLE: z.coerce.number().min(1).default(3),
   ACTIVITY_SPIKE_MIN_TRADES: z.coerce.number().int().min(1).default(10),
   WHALE_TRADE_USD_THRESHOLD: z.coerce.number().min(1).default(5_000),
+  WALLET_INTELLIGENCE_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  WALLET_ANALYSIS_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
+  SMART_MONEY_MIN_VOLUME_USD: z.coerce.number().min(0).default(10_000),
+  WALLET_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+  COORDINATED_ACTIVITY_THRESHOLD: z.coerce.number().int().min(2).default(4),
   RECONNECT_MIN_MS: z.coerce.number().int().min(250).default(1_000),
   RECONNECT_MAX_MS: z.coerce.number().int().min(1_000).default(30_000),
   HTTP_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(15_000),

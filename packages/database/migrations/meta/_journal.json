@@ -15,6 +15,20 @@
       "when": 1790448000000,
       "tag": "0002_intelligence_anomaly_types",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790534400000,
+      "tag": "0003_wallet_intelligence",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790620800000,
+      "tag": "0004_live_polymarket_metadata",
+      "breakpoints": true
     }
   ]
 }

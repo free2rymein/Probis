@@ -11,6 +11,7 @@ import { createWorkerRepositories } from "./repositories";
 import { createWorkerDatabase } from "./services/database";
 import { createMockMarket } from "./services/mock-source";
 import { logger } from "./utils/logger";
+import { WalletIntelligenceProfiler } from "./wallet-intelligence/profiler";
 
 const packageEnvPath = resolve(process.cwd(), ".env");
 const rootEnvPath = resolve(process.cwd(), "../..", ".env");
@@ -42,12 +43,14 @@ const intelligenceEngine = new IntelligenceEngine(
   createIntelligenceConfig(config),
   repositories.intelligence
 );
+const walletProfiler = new WalletIntelligenceProfiler(config, repositories.walletIntelligence);
 
 const shutdown = async () => {
   logger.warn("workers.shutdown", {});
   marketDiscovery.stop();
   tradeIngestion.stop();
   intelligenceEngine.stop();
+  walletProfiler.stop();
   await close();
   process.exit(0);
 };
@@ -61,7 +64,14 @@ logger.info("workers.start", {
   tradeFlushIntervalMs: config.TRADE_FLUSH_INTERVAL_MS,
   aggregateFlushIntervalMs: config.AGGREGATE_FLUSH_INTERVAL_MS,
   intelligenceEnabled: config.INTELLIGENCE_ENABLED,
-  intelligenceIntervalMs: config.INTELLIGENCE_INTERVAL_MS
+  intelligenceIntervalMs: config.INTELLIGENCE_INTERVAL_MS,
+  walletIntelligenceEnabled: config.WALLET_INTELLIGENCE_ENABLED,
+  walletAnalysisIntervalMs: config.WALLET_ANALYSIS_INTERVAL_MS
 });
 
-await Promise.all([marketDiscovery.run(), tradeIngestion.run(), intelligenceEngine.run()]);
+await Promise.all([
+  marketDiscovery.run(),
+  tradeIngestion.run(),
+  intelligenceEngine.run(),
+  walletProfiler.run()
+]);

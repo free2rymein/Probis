@@ -25,7 +25,9 @@ const orderClause = (sql: ReturnType<typeof getSql>, sort: string, direction: "a
   if (sort === "title") return sql`m.title ${dir}`;
   if (sort === "status") return sql`m.status ${dir}, m.updated_at DESC`;
   if (sort === "volume") return sql`COALESCE(volume_24h.value, 0) ${dir}, m.updated_at DESC`;
-  if (sort === "probability") return sql`latest.close ${dir} NULLS LAST, m.updated_at DESC`;
+  if (sort === "probability") {
+    return sql`COALESCE(latest.close, m.current_probability) ${dir} NULLS LAST, m.updated_at DESC`;
+  }
   return sql`m.updated_at ${dir}`;
 };
 
@@ -42,9 +44,9 @@ export const GET = withApiHandler(async (request, { requestId }) => {
       m.source::text AS source,
       m.category,
       m.status::text AS status,
-      latest.close::text AS probability,
-      volume_24h.value::text AS volume_24h,
-      NULLIF(to_jsonb(m)->>'liquidity', '') AS liquidity,
+      COALESCE(latest.close, m.current_probability)::text AS probability,
+      COALESCE(volume_24h.value, m.volume_24h)::text AS volume_24h,
+      m.liquidity::text AS liquidity,
       latest.bucket AS latest_aggregate_bucket,
       m.updated_at,
       COUNT(*) OVER()::text AS total_count

@@ -6,8 +6,14 @@ import { getRequestId, getRoute } from "./request";
 const logger = createLogger("api");
 
 export const withApiHandler =
-  (handler: (request: Request, context: { requestId: string }) => Promise<Response> | Response) =>
-  async (request: Request) => {
+  (
+    handler: (
+      request: Request,
+      context: { requestId: string },
+      routeContext?: unknown
+    ) => Promise<Response> | Response
+  ) =>
+  async (request: Request, routeContext?: unknown) => {
     const requestId = getRequestId(request);
     const route = getRoute(request);
     const startedAt = performance.now();
@@ -19,7 +25,7 @@ export const withApiHandler =
     });
 
     try {
-      const response = await handler(request, { requestId });
+      const response = await handler(request, { requestId }, routeContext);
       logger.info("request.end", {
         requestId,
         route,

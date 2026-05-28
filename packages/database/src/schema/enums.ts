@@ -28,12 +28,18 @@ export const anomalyTypeEnum = pgEnum("anomaly_type", [
   "price_dislocation",
   "probability_shock",
   "activity_burst",
-  "whale_activity"
+  "whale_activity",
+  "repeat_whale_activity",
+  "coordinated_wallet_activity"
 ]);
 
 export const timelineEventTypeEnum = pgEnum("timeline_event_type", [
   "trade",
   "aggregate",
+  "market_sync",
+  "live_trade_ingested",
+  "aggregate_updated",
+  "anomaly_detected",
   "anomaly",
   "narrative",
   "alert",

@@ -65,6 +65,11 @@ export function DashboardClient() {
       label: "Signals / 24h",
       value: formatCompactNumber(metrics.openSignalsCount),
       icon: BellRing
+    },
+    {
+      label: "Active whales",
+      value: formatCompactNumber(metrics.activeWhalesCount),
+      icon: TrendingUp
     }
   ] as const;
 
@@ -107,6 +112,30 @@ export function DashboardClient() {
               <span className="text-muted-foreground">High severity / 24h</span>
               <span className="font-mono">
                 {formatCompactNumber(metrics.highSeveritySignalsCount)}
+              </span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Top smart wallet</span>
+              <span className="font-mono">
+                {metrics.topSmartMoneyWallet
+                  ? `${metrics.topSmartMoneyWallet.slice(0, 6)}...${metrics.topSmartMoneyWallet.slice(-4)}`
+                  : "none"}
+              </span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Top smart score</span>
+              <span className="font-mono">{metrics.topSmartMoneyScore?.toFixed(0) ?? "none"}</span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Whale alerts / 24h</span>
+              <span className="font-mono">
+                {formatCompactNumber(metrics.recentWhaleAlertsCount)}
+              </span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Coordinated / 24h</span>
+              <span className="font-mono">
+                {formatCompactNumber(metrics.coordinatedActivityCount)}
               </span>
             </div>
             <div className="border-border flex items-center justify-between rounded-md border p-3">

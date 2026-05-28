@@ -16,6 +16,11 @@ type DashboardRow = {
   open_signals_count: string;
   high_severity_signals_count: string;
   latest_anomaly_timestamp: Date | null;
+  active_whales_count: string;
+  top_smart_money_wallet: string | null;
+  top_smart_money_score: string | null;
+  recent_whale_alerts_count: string;
+  coordinated_activity_count: string;
   recent_timeline_events_1h: string;
 };
 
@@ -64,9 +69,41 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
         MAX(detected_at) AS latest_anomaly_timestamp
       FROM anomaly_events
       WHERE detected_at >= now() - interval '24 hours'
+    ),
+    wallet_stats AS (
+      SELECT
+        COUNT(*) FILTER (
+          WHERE last_active_at >= now() - interval '24 hours'
+            AND (influence_score >= 70 OR metadata->>'large_trade_count' IS NOT NULL)
+        )::text AS active_whales_count,
+        (
+          SELECT wallet_address
+          FROM wallet_profiles
+          ORDER BY smart_money_score DESC, influence_score DESC
+          LIMIT 1
+        ) AS top_smart_money_wallet,
+        (
+          SELECT smart_money_score::text
+          FROM wallet_profiles
+          ORDER BY smart_money_score DESC, influence_score DESC
+          LIMIT 1
+        ) AS top_smart_money_score,
+        (
+          SELECT COUNT(*)::text
+          FROM anomaly_events
+          WHERE detected_at >= now() - interval '24 hours'
+            AND anomaly_type IN ('whale_activity', 'repeat_whale_activity')
+        ) AS recent_whale_alerts_count,
+        (
+          SELECT COUNT(*)::text
+          FROM anomaly_events
+          WHERE detected_at >= now() - interval '24 hours'
+            AND anomaly_type = 'coordinated_wallet_activity'
+        ) AS coordinated_activity_count
+      FROM wallet_profiles
     )
     SELECT *
-    FROM market_counts, market_freshness, aggregate_stats, timeline_stats, anomaly_stats
+    FROM market_counts, market_freshness, aggregate_stats, timeline_stats, anomaly_stats, wallet_stats
   `;
 
   const latestBucket = row?.latest_aggregate_bucket ?? null;
@@ -83,6 +120,14 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
     openSignalsCount: Number(row?.open_signals_count ?? 0),
     highSeveritySignalsCount: Number(row?.high_severity_signals_count ?? 0),
     latestAnomalyTimestamp: row?.latest_anomaly_timestamp?.toISOString() ?? null,
+    activeWhalesCount: Number(row?.active_whales_count ?? 0),
+    topSmartMoneyWallet: row?.top_smart_money_wallet ?? null,
+    topSmartMoneyScore:
+      row?.top_smart_money_score === null || row?.top_smart_money_score === undefined
+        ? null
+        : Number(row.top_smart_money_score),
+    recentWhaleAlertsCount: Number(row?.recent_whale_alerts_count ?? 0),
+    coordinatedActivityCount: Number(row?.coordinated_activity_count ?? 0),
     recentTimelineEvents1h: Number(row?.recent_timeline_events_1h ?? 0),
     ingestionHealth: healthFromBucket(latestBucket)
   };

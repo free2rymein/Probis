@@ -32,6 +32,17 @@ export const markets = pgTable(
     description: text("description"),
     category: text("category").notNull(),
     status: marketStatusEnum("status").notNull().default("open"),
+    conditionId: text("condition_id"),
+    clobTokenIds: text("clob_token_ids")
+      .array()
+      .notNull()
+      .default(sql`ARRAY[]::text[]`),
+    currentProbability: numeric("current_probability", { precision: 18, scale: 8 }),
+    volume24h: numeric("volume_24h", { precision: 30, scale: 8 }),
+    liquidity: numeric("liquidity", { precision: 30, scale: 8 }),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     resolutionDate: timestamp("resolution_date", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
@@ -44,6 +55,8 @@ export const markets = pgTable(
     ),
     categoryIdx: index("markets_category_idx").on(table.category),
     statusIdx: index("markets_status_idx").on(table.status),
+    conditionIdIdx: index("markets_condition_id_idx").on(table.conditionId),
+    clobTokenIdsGinIdx: index("markets_clob_token_ids_gin_idx").using("gin", table.clobTokenIds),
     slugIdx: uniqueIndex("markets_slug_uidx").on(table.slug)
   })
 );
@@ -61,6 +74,11 @@ export const trades = pgTable(
     quantity: numeric("quantity", { precision: 30, scale: 12 }).notNull(),
     usdValue: numeric("usd_value", { precision: 30, scale: 8 }).notNull(),
     transactionHash: text("transaction_hash").notNull(),
+    clobTokenId: text("clob_token_id"),
+    outcome: text("outcome"),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     tradeTimestamp: timestamp("trade_timestamp", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
   },
@@ -74,7 +92,8 @@ export const trades = pgTable(
     timestampDescIdx: index("trades_trade_timestamp_desc_idx").on(
       sql`${table.tradeTimestamp} DESC`
     ),
-    transactionIdx: index("trades_transaction_hash_idx").on(table.transactionHash)
+    transactionIdx: index("trades_transaction_hash_idx").on(table.transactionHash),
+    clobTokenIdIdx: index("trades_clob_token_id_idx").on(table.clobTokenId)
   })
 );
 
@@ -122,6 +141,98 @@ export const walletStats = pgTable(
     ),
     informationAdvantageDescIdx: index("wallet_stats_information_advantage_score_desc_idx").on(
       sql`${table.informationAdvantageScore} DESC`
+    )
+  })
+);
+
+export const walletProfiles = pgTable(
+  "wallet_profiles",
+  {
+    walletAddress: text("wallet_address").primaryKey(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    totalVolumeUsd: numeric("total_volume_usd", { precision: 30, scale: 8 }).notNull().default("0"),
+    totalTradeCount: integer("total_trade_count").notNull().default(0),
+    smartMoneyScore: numeric("smart_money_score", { precision: 8, scale: 4 })
+      .notNull()
+      .default("0"),
+    convictionScore: numeric("conviction_score", { precision: 8, scale: 4 }).notNull().default("0"),
+    influenceScore: numeric("influence_score", { precision: 8, scale: 4 }).notNull().default("0"),
+    activeMarketCount: integer("active_market_count").notNull().default(0),
+    anomalyTriggerCount: integer("anomaly_trigger_count").notNull().default(0),
+    lastActiveAt: timestamp("last_active_at", { withTimezone: true }).notNull(),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default(sql`'{}'::jsonb`)
+  },
+  (table) => ({
+    smartMoneyDescIdx: index("wallet_profiles_smart_money_score_desc_idx").on(
+      sql`${table.smartMoneyScore} DESC`
+    ),
+    influenceDescIdx: index("wallet_profiles_influence_score_desc_idx").on(
+      sql`${table.influenceScore} DESC`
+    ),
+    lastActiveDescIdx: index("wallet_profiles_last_active_at_desc_idx").on(
+      sql`${table.lastActiveAt} DESC`
+    ),
+    volumeDescIdx: index("wallet_profiles_total_volume_usd_desc_idx").on(
+      sql`${table.totalVolumeUsd} DESC`
+    )
+  })
+);
+
+export const walletMarketActivity = pgTable(
+  "wallet_market_activity",
+  {
+    walletAddress: text("wallet_address").notNull(),
+    marketId: uuid("market_id")
+      .notNull()
+      .references(() => markets.id, { onDelete: "cascade" }),
+    totalVolumeUsd: numeric("total_volume_usd", { precision: 30, scale: 8 }).notNull().default("0"),
+    tradeCount: integer("trade_count").notNull().default(0),
+    netPositionEstimate: numeric("net_position_estimate", { precision: 30, scale: 12 })
+      .notNull()
+      .default("0"),
+    lastTradeAt: timestamp("last_trade_at", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "wallet_market_activity_pk",
+      columns: [table.walletAddress, table.marketId]
+    }),
+    walletIdx: index("wallet_market_activity_wallet_idx").on(table.walletAddress),
+    marketIdx: index("wallet_market_activity_market_idx").on(table.marketId),
+    lastTradeDescIdx: index("wallet_market_activity_last_trade_at_desc_idx").on(
+      sql`${table.lastTradeAt} DESC`
+    ),
+    volumeDescIdx: index("wallet_market_activity_total_volume_usd_desc_idx").on(
+      sql`${table.totalVolumeUsd} DESC`
+    )
+  })
+);
+
+export const walletDailyStats = pgTable(
+  "wallet_daily_stats",
+  {
+    walletAddress: text("wallet_address").notNull(),
+    bucketDate: timestamp("bucket_date", { withTimezone: true }).notNull(),
+    totalVolumeUsd: numeric("total_volume_usd", { precision: 30, scale: 8 }).notNull().default("0"),
+    tradeCount: integer("trade_count").notNull().default(0),
+    activeMarkets: integer("active_markets").notNull().default(0),
+    anomalyCount: integer("anomaly_count").notNull().default(0)
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "wallet_daily_stats_pk",
+      columns: [table.walletAddress, table.bucketDate]
+    }),
+    walletDateIdx: index("wallet_daily_stats_wallet_bucket_date_idx").on(
+      table.walletAddress,
+      table.bucketDate
+    ),
+    dateDescIdx: index("wallet_daily_stats_bucket_date_desc_idx").on(sql`${table.bucketDate} DESC`),
+    volumeDescIdx: index("wallet_daily_stats_total_volume_usd_desc_idx").on(
+      sql`${table.totalVolumeUsd} DESC`
     )
   })
 );
@@ -244,6 +355,13 @@ export const tradesRelations = relations(trades, ({ one }) => ({
 export const anomalyEventsRelations = relations(anomalyEvents, ({ one }) => ({
   market: one(markets, {
     fields: [anomalyEvents.marketId],
+    references: [markets.id]
+  })
+}));
+
+export const walletMarketActivityRelations = relations(walletMarketActivity, ({ one }) => ({
+  market: one(markets, {
+    fields: [walletMarketActivity.marketId],
     references: [markets.id]
   })
 }));

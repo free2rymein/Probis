@@ -24,7 +24,19 @@ export const aggregatesQuerySchema = z.object({
 export const timelineQuerySchema = paginationQuerySchema.extend({
   marketId: z.string().uuid().optional(),
   eventType: z
-    .enum(["trade", "aggregate", "anomaly", "narrative", "alert", "resolution", "system"])
+    .enum([
+      "trade",
+      "aggregate",
+      "market_sync",
+      "live_trade_ingested",
+      "aggregate_updated",
+      "anomaly_detected",
+      "anomaly",
+      "narrative",
+      "alert",
+      "resolution",
+      "system"
+    ])
     .optional()
 });
 
@@ -34,6 +46,18 @@ export const signalsQuerySchema = paginationQuerySchema.extend({
   lookbackHours: z.coerce.number().int().min(1).max(720).default(168),
   sort: z.enum(["severity_score", "detected_at"]).default("severity_score"),
   direction: z.enum(["asc", "desc"]).default("desc")
+});
+
+export const walletsQuerySchema = paginationQuerySchema.extend({
+  search: z.string().trim().min(1).max(100).optional(),
+  sort: z
+    .enum(["smart_money_score", "influence_score", "total_volume_usd", "last_active_at"])
+    .default("smart_money_score"),
+  direction: z.enum(["asc", "desc"]).default("desc")
+});
+
+export const walletActivityQuerySchema = paginationQuerySchema.extend({
+  lookbackDays: z.coerce.number().int().min(1).max(90).default(7)
 });
 
 export const queryObject = (request: Request) =>

@@ -17,6 +17,12 @@ export const createMarketsRepository = (db: ProbisDatabase) => ({
           description: item.description,
           category: item.category,
           status: item.status,
+          conditionId: item.conditionId,
+          clobTokenIds: item.clobTokenIds,
+          currentProbability: item.currentProbability,
+          volume24h: item.volume24h,
+          liquidity: item.liquidity,
+          metadata: item.metadata,
           resolutionDate: item.resolutionDate,
           updatedAt: new Date()
         }))
@@ -29,6 +35,12 @@ export const createMarketsRepository = (db: ProbisDatabase) => ({
           description: sql`excluded.description`,
           category: sql`excluded.category`,
           status: sql`excluded.status`,
+          conditionId: sql`excluded.condition_id`,
+          clobTokenIds: sql`excluded.clob_token_ids`,
+          currentProbability: sql`excluded.current_probability`,
+          volume24h: sql`excluded.volume_24h`,
+          liquidity: sql`excluded.liquidity`,
+          metadata: sql`excluded.metadata`,
           resolutionDate: sql`excluded.resolution_date`,
           updatedAt: new Date()
         }
@@ -57,9 +69,24 @@ export const createMarketsRepository = (db: ProbisDatabase) => ({
     return row?.id ?? null;
   },
 
+  async findIdByClobTokenId(source: NormalizedMarket["source"], tokenId: string) {
+    const [row] = await db
+      .select({ id: markets.id })
+      .from(markets)
+      .where(and(eq(markets.source, source), sql`${tokenId} = ANY(${markets.clobTokenIds})`))
+      .limit(1);
+
+    return row?.id ?? null;
+  },
+
   async listActiveMarketRefs(source: NormalizedMarket["source"], limit: number) {
     return db
-      .select({ id: markets.id, externalId: markets.externalId })
+      .select({
+        id: markets.id,
+        externalId: markets.externalId,
+        conditionId: markets.conditionId,
+        clobTokenIds: markets.clobTokenIds
+      })
       .from(markets)
       .where(and(eq(markets.source, source), eq(markets.status, "open")))
       .limit(limit);

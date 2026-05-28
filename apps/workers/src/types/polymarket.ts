@@ -10,6 +10,24 @@ export type PolymarketMarket = {
   closed?: boolean;
   endDate?: string;
   updatedAt?: string;
+  liquidity?: string | number;
+  liquidityNum?: string | number;
+  volume24hr?: string | number;
+  volume24hrClob?: string | number;
+  volume?: string | number;
+  lastTradePrice?: string | number;
+  bestAsk?: string | number;
+  bestBid?: string | number;
+  outcomePrices?: string | string[] | number[];
+  outcomes?: string | string[];
+  clobTokenIds?: string | string[];
+  tokens?: Array<{
+    token_id?: string;
+    tokenId?: string;
+    outcome?: string;
+    price?: string | number;
+  }>;
+  tags?: Array<{ label?: string; name?: string; slug?: string } | string>;
 };
 
 export type PolymarketTrade = {
@@ -17,13 +35,24 @@ export type PolymarketTrade = {
   conditionId?: string;
   market?: string;
   marketId?: string;
+  asset?: string;
+  assetId?: string;
+  tokenId?: string;
+  outcome?: string;
   makerAddress?: string;
+  takerAddress?: string;
+  proxyWallet?: string;
+  trader?: string;
   walletAddress?: string;
   side?: string;
   price?: string | number;
   size?: string | number;
   amount?: string | number;
+  usdcSize?: string | number;
+  notional?: string | number;
   transactionHash?: string;
   txHash?: string;
+  tradeId?: string;
+  orderHash?: string;
   timestamp?: string | number;
 };

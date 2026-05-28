@@ -34,6 +34,9 @@ export const createTradesRepository = (db: ProbisDatabase) => ({
           quantity: item.quantity,
           usdValue: item.usdValue,
           transactionHash: item.transactionHash,
+          clobTokenId: item.clobTokenId,
+          outcome: item.outcome,
+          metadata: item.metadata,
           tradeTimestamp: item.tradeTimestamp
         }))
       )

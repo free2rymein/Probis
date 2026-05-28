@@ -16,6 +16,7 @@ type Repositories = ReturnType<typeof createWorkerRepositories>;
 export class TradeIngestionWorker {
   private stopped = false;
   private lastSeenTradeAt = new Map<string, Date>();
+  private seenTradeIds = new Set<string>();
   private readonly aggregator = new OneMinuteAggregator();
   private readonly tradeBatcher: Batcher<NormalizedTrade>;
   private readonly timelineBatcher: Batcher<ReplayEvent>;
@@ -33,6 +34,7 @@ export class TradeIngestionWorker {
       flush: async (trades) => {
         const inserted = await this.repositories.trades.appendMany(trades);
         logger.info("trades.inserted", { attempted: trades.length, inserted: inserted.length });
+        logger.info("polymarket.trade_deduped", { skipped: trades.length - inserted.length });
       }
     });
 
@@ -65,7 +67,10 @@ export class TradeIngestionWorker {
   }
 
   private async runPollingFallback() {
-    logger.info("trade_polling.start", { intervalMs: this.config.TRADE_POLL_INTERVAL_MS });
+    logger.info("trade_polling.start", {
+      intervalMs: this.config.TRADE_POLL_INTERVAL_MS,
+      mode: this.config.WORKER_MODE
+    });
 
     while (!this.stopped) {
       await this.pollOnce();
@@ -97,13 +102,70 @@ export class TradeIngestionWorker {
       return;
     }
 
+    logger.info("polymarket.trade_poll.start", {
+      markets: marketRefs.length,
+      limit: this.config.TRADE_POLL_LIMIT
+    });
+    let rawCount = 0;
+    let normalizedCount = 0;
+
     for (const market of marketRefs) {
-      const trades = await this.client.fetchTrades(
-        market.externalId,
-        this.lastSeenTradeAt.get(market.externalId)
-      );
-      this.handleRawTrades(market.externalId, market.id, trades);
+      try {
+        const lookupId = market.conditionId ?? market.externalId;
+        const since = this.lastSeenTradeAt.get(lookupId);
+        const byCondition = await this.client.fetchTradesByCondition(lookupId, since);
+        const byToken = await this.fetchTokenTrades(market.clobTokenIds ?? [], since);
+        const trades = this.dedupeRawTrades([...byCondition, ...byToken]);
+        rawCount += trades.length;
+        normalizedCount += this.handleRawTrades(lookupId, market.id, trades);
+      } catch (error) {
+        logger.warn("polymarket.trade_poll.market_failed", {
+          externalId: market.externalId,
+          conditionId: market.conditionId,
+          message: error instanceof Error ? error.message : "Unknown trade polling error"
+        });
+      }
     }
+
+    logger.info("polymarket.trade_poll.complete", {
+      markets: marketRefs.length,
+      rawTrades: rawCount,
+      normalizedTrades: normalizedCount
+    });
+  }
+
+  private async fetchTokenTrades(tokenIds: string[], since?: Date) {
+    const trades: PolymarketTrade[] = [];
+
+    for (const tokenId of tokenIds.slice(0, 2)) {
+      try {
+        trades.push(...(await this.client.fetchTradesByToken(tokenId, since)));
+      } catch (error) {
+        logger.warn("polymarket.trade_poll.token_failed", {
+          tokenId,
+          message: error instanceof Error ? error.message : "Unknown token trade polling error"
+        });
+      }
+    }
+
+    return trades;
+  }
+
+  private dedupeRawTrades(trades: PolymarketTrade[]) {
+    const unique = new Map<string, PolymarketTrade>();
+
+    for (const trade of trades) {
+      const id =
+        trade.transactionHash ??
+        trade.txHash ??
+        trade.tradeId ??
+        trade.id ??
+        trade.orderHash ??
+        `${trade.market ?? trade.conditionId ?? trade.asset ?? "unknown"}-${trade.timestamp ?? ""}`;
+      unique.set(id, trade);
+    }
+
+    return [...unique.values()].slice(0, this.config.TRADE_POLL_LIMIT);
   }
 
   private handleRawTrades(externalMarketId: string, marketId: string, trades: PolymarketTrade[]) {
@@ -121,16 +183,26 @@ export class TradeIngestionWorker {
     }
 
     this.handleTrades(normalized);
+    return normalized.length;
   }
 
   private handleTrades(trades: NormalizedTrade[]) {
     for (const trade of trades) {
+      if (this.seenTradeIds.has(trade.transactionHash)) {
+        logger.info("polymarket.trade_deduped", { transactionHash: trade.transactionHash });
+        continue;
+      }
+      this.seenTradeIds.add(trade.transactionHash);
+      if (this.seenTradeIds.size > 20_000) {
+        this.seenTradeIds = new Set([...this.seenTradeIds].slice(-10_000));
+      }
+
       this.aggregator.add(trade);
       this.tradeBatcher.add(trade);
       this.bus.publish({ type: "trade.normalized", payload: trade });
       this.timelineBatcher.add({
         marketId: trade.marketId,
-        eventType: "trade",
+        eventType: this.config.WORKER_MODE === "live" ? "live_trade_ingested" : "trade",
         eventTimestamp: trade.tradeTimestamp,
         payload: {
           source: trade.source,
@@ -139,8 +211,17 @@ export class TradeIngestionWorker {
           quantity: trade.quantity,
           usdValue: trade.usdValue,
           walletAddress: trade.walletAddress,
-          transactionHash: trade.transactionHash
+          transactionHash: trade.transactionHash,
+          clobTokenId: trade.clobTokenId,
+          outcome: trade.outcome,
+          metadata: trade.metadata
         }
+      });
+
+      logger.info("wallet_address.mapped", {
+        walletAddress: trade.walletAddress,
+        transactionHash: trade.transactionHash,
+        source: trade.source
       });
     }
   }
@@ -151,6 +232,21 @@ export class TradeIngestionWorker {
       if (candles.length === 0) return;
 
       await this.repositories.aggregates.upsertMany(candles);
+      await this.repositories.timeline.appendMany(
+        candles.map((candle) => ({
+          marketId: candle.marketId,
+          eventType: "aggregate_updated",
+          eventTimestamp: candle.bucket,
+          payload: {
+            open: candle.open,
+            high: candle.high,
+            low: candle.low,
+            close: candle.close,
+            volume: candle.volume,
+            tradeCount: candle.tradeCount
+          }
+        }))
+      );
       this.bus.publish({ type: "aggregate.flush", payload: { count: candles.length } });
       logger.info("aggregates.flushed", { count: candles.length });
     }, this.config.AGGREGATE_FLUSH_INTERVAL_MS);
@@ -204,7 +300,13 @@ export class TradeIngestionWorker {
     const grouped = new Map<string, PolymarketTrade[]>();
 
     for (const event of events) {
-      const externalMarketId = event.conditionId ?? event.marketId ?? event.market;
+      const externalMarketId =
+        event.conditionId ??
+        event.marketId ??
+        event.market ??
+        event.asset ??
+        event.assetId ??
+        event.tokenId;
       if (!externalMarketId) continue;
 
       grouped.set(externalMarketId, [...(grouped.get(externalMarketId) ?? []), event]);
@@ -215,8 +317,16 @@ export class TradeIngestionWorker {
         "polymarket",
         externalMarketId
       );
-      if (!marketId) continue;
-      this.handleRawTrades(externalMarketId, marketId, trades);
+      const tokenMarketId = marketId
+        ? null
+        : await this.repositories.markets.findIdByClobTokenId("polymarket", externalMarketId);
+      if (!marketId && !tokenMarketId) {
+        logger.warn("market_mapping.failed", { externalMarketId });
+        continue;
+      }
+      const resolvedMarketId = marketId ?? tokenMarketId;
+      if (!resolvedMarketId) continue;
+      this.handleRawTrades(externalMarketId, resolvedMarketId, trades);
     }
   }
 }

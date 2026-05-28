@@ -5,7 +5,10 @@ import type {
   DashboardMetrics,
   MarketListItem,
   PaginatedResponse,
-  TimelineListItem
+  TimelineListItem,
+  WalletActivityPoint,
+  WalletDetail,
+  WalletIntelligenceSummary
 } from "@probis/types";
 import { apiGet } from "./client";
 
@@ -30,12 +33,21 @@ export type SignalsQuery = {
   direction?: "asc" | "desc";
 };
 
+export type WalletsQuery = {
+  limit: number;
+  offset: number;
+  search?: string;
+  sort?: "smart_money_score" | "influence_score" | "total_volume_usd" | "last_active_at";
+  direction?: "asc" | "desc";
+};
+
 export const REFRESH_INTERVALS = {
   dashboard: 15_000,
   markets: 30_000,
   aggregates: 20_000,
   timeline: 20_000,
-  signals: 20_000
+  signals: 20_000,
+  wallets: 60_000
 } as const;
 
 export function useDashboardMetrics() {
@@ -82,5 +94,37 @@ export function useSignals(query: SignalsQuery) {
       apiGet<PaginatedResponse<AnomalySignal>>("/api/signals", query, signal),
     placeholderData: (previous) => previous,
     refetchInterval: REFRESH_INTERVALS.signals
+  });
+}
+
+export function useWallets(query: WalletsQuery) {
+  return useQuery({
+    queryKey: ["wallets", query],
+    queryFn: ({ signal }) =>
+      apiGet<PaginatedResponse<WalletIntelligenceSummary>>("/api/wallets", query, signal),
+    placeholderData: (previous) => previous,
+    refetchInterval: REFRESH_INTERVALS.wallets
+  });
+}
+
+export function useWalletActivity(limit = 10) {
+  return useQuery({
+    queryKey: ["wallet-activity", limit],
+    queryFn: ({ signal }) =>
+      apiGet<PaginatedResponse<WalletActivityPoint>>(
+        "/api/wallets/activity",
+        { limit, offset: 0 },
+        signal
+      ),
+    refetchInterval: REFRESH_INTERVALS.wallets
+  });
+}
+
+export function useWalletDetail(address: string) {
+  return useQuery({
+    queryKey: ["wallet", address],
+    queryFn: ({ signal }) => apiGet<WalletDetail>(`/api/wallets/${address}`, {}, signal),
+    enabled: Boolean(address),
+    refetchInterval: REFRESH_INTERVALS.wallets
   });
 }

@@ -7,6 +7,9 @@ import type {
   markets,
   narrativeEvents,
   trades,
+  walletDailyStats,
+  walletMarketActivity,
+  walletProfiles,
   walletStats
 } from "./tables";
 
@@ -21,6 +24,15 @@ export type NewMarketAggregate1m = InferInsertModel<typeof marketAggregates1m>;
 
 export type WalletStats = InferSelectModel<typeof walletStats>;
 export type NewWalletStats = InferInsertModel<typeof walletStats>;
+
+export type WalletProfile = InferSelectModel<typeof walletProfiles>;
+export type NewWalletProfile = InferInsertModel<typeof walletProfiles>;
+
+export type WalletMarketActivity = InferSelectModel<typeof walletMarketActivity>;
+export type NewWalletMarketActivity = InferInsertModel<typeof walletMarketActivity>;
+
+export type WalletDailyStats = InferSelectModel<typeof walletDailyStats>;
+export type NewWalletDailyStats = InferInsertModel<typeof walletDailyStats>;
 
 export type AnomalyEvent = InferSelectModel<typeof anomalyEvents>;
 export type NewAnomalyEvent = InferInsertModel<typeof anomalyEvents>;

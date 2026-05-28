@@ -21,6 +21,10 @@ export class MarketDiscoveryService {
   }
 
   async run() {
+    if (this.config.WORKER_MODE === "live") {
+      logger.info("live_mode.enabled", {});
+    }
+
     logger.info("market_discovery.start", {
       intervalMs: this.config.MARKET_DISCOVERY_INTERVAL_MS
     });
@@ -32,12 +36,38 @@ export class MarketDiscoveryService {
   }
 
   async syncOnce() {
+    if (this.config.WORKER_MODE === "mock") {
+      const { createMockMarket } = await import("../services/mock-source");
+      const rows = await this.repositories.markets.upsertMany([createMockMarket()]);
+      logger.info("market_discovery.mock_synced", { upserted: rows.length });
+      return;
+    }
+
     const startedAt = Date.now();
-    const rawMarkets = await this.client.fetchActiveMarkets(this.config.MAX_MARKETS_PER_POLL);
+    logger.info("polymarket.market_sync.start", {
+      limit: this.config.MARKET_SYNC_LIMIT,
+      activeOnly: this.config.MARKET_SYNC_ACTIVE_ONLY
+    });
+    const rawMarkets = await this.client.fetchActiveMarkets(this.config.MARKET_SYNC_LIMIT);
     const markets = rawMarkets.map(normalizePolymarketMarket).filter((market) => market !== null);
     const rows = await this.repositories.markets.upsertMany(markets);
 
-    logger.info("market_discovery.synced", {
+    await this.repositories.timeline.appendMany(
+      rows.map((row) => ({
+        marketId: row.id,
+        eventType: "market_sync",
+        eventTimestamp: new Date(),
+        payload: {
+          source: row.source,
+          externalId: row.externalId,
+          conditionId: row.conditionId,
+          clobTokenIds: row.clobTokenIds,
+          status: row.status
+        }
+      }))
+    );
+
+    logger.info("polymarket.market_sync.complete", {
       fetched: rawMarkets.length,
       normalized: markets.length,
       upserted: rows.length,

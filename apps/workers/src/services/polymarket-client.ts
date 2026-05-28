@@ -7,8 +7,10 @@ export class PolymarketClient {
 
   async fetchActiveMarkets(limit: number, offset = 0): Promise<PolymarketMarket[]> {
     const url = new URL("/markets", this.config.POLYMARKET_GAMMA_API_URL);
-    url.searchParams.set("active", "true");
-    url.searchParams.set("closed", "false");
+    if (this.config.MARKET_SYNC_ACTIVE_ONLY) {
+      url.searchParams.set("active", "true");
+      url.searchParams.set("closed", "false");
+    }
     url.searchParams.set("limit", limit.toString());
     url.searchParams.set("offset", offset.toString());
     url.searchParams.set("order", "updatedAt");
@@ -17,9 +19,22 @@ export class PolymarketClient {
     return fetchJson<PolymarketMarket[]>(url, this.config);
   }
 
-  async fetchTrades(conditionId: string, since?: Date): Promise<PolymarketTrade[]> {
+  async fetchTradesByCondition(conditionId: string, since?: Date): Promise<PolymarketTrade[]> {
     const url = new URL("/trades", this.config.POLYMARKET_CLOB_API_URL);
     url.searchParams.set("market", conditionId);
+    url.searchParams.set("limit", this.config.TRADE_POLL_LIMIT.toString());
+
+    if (since) {
+      url.searchParams.set("after", Math.floor(since.getTime() / 1000).toString());
+    }
+
+    return fetchJson<PolymarketTrade[]>(url, this.config);
+  }
+
+  async fetchTradesByToken(tokenId: string, since?: Date): Promise<PolymarketTrade[]> {
+    const url = new URL("/trades", this.config.POLYMARKET_CLOB_API_URL);
+    url.searchParams.set("asset_id", tokenId);
+    url.searchParams.set("limit", this.config.TRADE_POLL_LIMIT.toString());
 
     if (since) {
       url.searchParams.set("after", Math.floor(since.getTime() / 1000).toString());
