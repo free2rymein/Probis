@@ -1,6 +1,7 @@
 import type { WorkerConfig } from "../config/env";
 import type { PolymarketMarket, PolymarketTrade } from "../types/polymarket";
 import { fetchJson } from "../utils/http";
+import { logger } from "../utils/logger";
 
 export class PolymarketClient {
   constructor(private readonly config: WorkerConfig) {}
@@ -41,5 +42,21 @@ export class PolymarketClient {
     }
 
     return fetchJson<PolymarketTrade[]>(url, this.config);
+  }
+
+  async fetchDataApiTrades(conditionIds: string[]): Promise<PolymarketTrade[]> {
+    if (conditionIds.length === 0) return [];
+
+    const url = new URL("/trades", this.config.POLYMARKET_DATA_API_URL);
+    url.searchParams.set("market", conditionIds.join(","));
+    url.searchParams.set("limit", this.config.TRADE_POLL_LIMIT.toString());
+    url.searchParams.set("takerOnly", this.config.TRADE_POLL_TAKER_ONLY ? "true" : "false");
+
+    const trades = await fetchJson<PolymarketTrade[]>(url, this.config);
+    logger.info("polymarket.data_api.trade_chunk.complete", {
+      markets: conditionIds.length,
+      trades: trades.length
+    });
+    return trades;
   }
 }

@@ -1,5 +1,7 @@
 import type { NormalizedMarket, NormalizedTrade } from "../types/events";
 import type { PolymarketMarket, PolymarketTrade } from "../types/polymarket";
+import { createHash } from "node:crypto";
+import { serializeForHash } from "../utils/serialization";
 
 const normalizeStatus = (market: PolymarketMarket): NormalizedMarket["status"] => {
   if (market.closed) return "closed";
@@ -92,21 +94,29 @@ export const normalizePolymarketTrade = (
   trade: PolymarketTrade,
   marketId: string
 ): NormalizedTrade | null => {
-  const clobTokenId = trade.asset ?? trade.assetId ?? trade.tokenId ?? null;
-  const externalMarketId = trade.conditionId ?? trade.marketId ?? trade.market ?? clobTokenId;
+  const clobTokenId = trade.asset ?? trade.assetId ?? trade.tokenId ?? trade.token_id ?? null;
+  const externalMarketId =
+    trade.conditionId ??
+    trade.condition_id ??
+    trade.marketId ??
+    trade.market_id ??
+    trade.market ??
+    clobTokenId;
   const walletAddress =
     trade.proxyWallet ??
+    trade.proxy_wallet ??
     trade.walletAddress ??
+    trade.wallet ??
     trade.trader ??
     trade.takerAddress ??
+    trade.taker ??
+    trade.maker ??
     trade.makerAddress;
-  const transactionHash =
-    trade.transactionHash ?? trade.txHash ?? trade.tradeId ?? trade.id ?? trade.orderHash;
   const rawSide = trade.side?.toLowerCase();
   const price = trade.price?.toString();
-  const quantity = (trade.size ?? trade.amount)?.toString();
+  const quantity = (trade.size ?? trade.amount ?? trade.shares)?.toString();
 
-  if (!externalMarketId || !walletAddress || !transactionHash || !rawSide || !price || !quantity) {
+  if (!externalMarketId || !walletAddress || !rawSide || !price || !quantity) {
     return null;
   }
 
@@ -117,6 +127,29 @@ export const normalizePolymarketTrade = (
       : trade.timestamp
         ? new Date(trade.timestamp)
         : new Date();
+  const transactionHash =
+    trade.transactionHash ??
+    trade.transaction_hash ??
+    trade.txHash ??
+    trade.tradeId ??
+    trade.trade_id ??
+    trade.id ??
+    trade.orderHash ??
+    createHash("sha256")
+      .update(
+        [
+          externalMarketId,
+          clobTokenId ?? "",
+          walletAddress,
+          side,
+          tradeTimestamp.toISOString(),
+          price,
+          quantity
+        ]
+          .map(serializeForHash)
+          .join("|")
+      )
+      .digest("hex");
 
   return {
     source: "polymarket",
@@ -126,16 +159,25 @@ export const normalizePolymarketTrade = (
     side,
     price,
     quantity,
-    usdValue: (trade.usdcSize ?? trade.notional ?? Number(price) * Number(quantity)).toString(),
-    transactionHash,
+    usdValue: (
+      trade.usdcSize ??
+      trade.usdc_size ??
+      trade.notional ??
+      Number(price) * Number(quantity)
+    ).toString(),
+    transactionHash: serializeForHash(transactionHash),
     clobTokenId,
     outcome: trade.outcome ?? null,
     metadata: {
       raw_wallet_fields: {
         proxy_wallet: trade.proxyWallet ?? null,
+        proxy_wallet_snake: trade.proxy_wallet ?? null,
         wallet_address: trade.walletAddress ?? null,
+        wallet: trade.wallet ?? null,
         trader: trade.trader ?? null,
         taker_address: trade.takerAddress ?? null,
+        taker: trade.taker ?? null,
+        maker: trade.maker ?? null,
         maker_address: trade.makerAddress ?? null
       },
       order_hash: trade.orderHash ?? null

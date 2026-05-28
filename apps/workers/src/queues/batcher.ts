@@ -1,4 +1,5 @@
 import { logger } from "../utils/logger";
+import { errorFields } from "../utils/errors";
 
 export type BatcherOptions<T> = {
   name: string;
@@ -51,7 +52,7 @@ export class Batcher<T> {
       logger.error("batch.flush_failed", {
         name: this.options.name,
         size: batch.length,
-        message: error instanceof Error ? error.message : "Unknown error"
+        ...errorFields(error)
       });
     } finally {
       this.flushing = false;

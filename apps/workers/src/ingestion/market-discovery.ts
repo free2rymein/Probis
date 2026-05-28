@@ -3,6 +3,7 @@ import { normalizePolymarketMarket } from "../normalization/polymarket";
 import type { createWorkerRepositories } from "../repositories";
 import { PolymarketClient } from "../services/polymarket-client";
 import { logger } from "../utils/logger";
+import { serializeJson } from "../utils/serialization";
 import { jitter, sleep } from "../utils/time";
 
 type Repositories = ReturnType<typeof createWorkerRepositories>;
@@ -57,13 +58,13 @@ export class MarketDiscoveryService {
         marketId: row.id,
         eventType: "market_sync",
         eventTimestamp: new Date(),
-        payload: {
+        payload: serializeJson({
           source: row.source,
           externalId: row.externalId,
           conditionId: row.conditionId,
           clobTokenIds: row.clobTokenIds,
           status: row.status
-        }
+        })
       }))
     );
 

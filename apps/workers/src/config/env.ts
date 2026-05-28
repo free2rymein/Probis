@@ -6,13 +6,27 @@ export const workerConfigSchema = z.object({
   WORKER_MODE: z.enum(["live", "mock"]).default("live"),
   POLYMARKET_GAMMA_API_URL: z.string().url().default("https://gamma-api.polymarket.com"),
   POLYMARKET_CLOB_API_URL: z.string().url().default("https://clob.polymarket.com"),
+  POLYMARKET_DATA_API_URL: z.string().url().default("https://data-api.polymarket.com"),
+  POLYMARKET_TRADE_SOURCE: z.enum(["data_api", "clob"]).default("data_api"),
   POLYMARKET_WS_URL: z.string().url().optional(),
   MARKET_SYNC_LIMIT: z.coerce.number().int().min(1).max(1_000).default(250),
   MARKET_SYNC_ACTIVE_ONLY: z
     .enum(["true", "false"])
     .default("true")
     .transform((value) => value === "true"),
-  TRADE_POLL_LIMIT: z.coerce.number().int().min(1).max(2_000).default(500),
+  TRADE_MARKETS_PER_REQUEST: z.coerce.number().int().min(1).max(50).default(20),
+  TRADE_POLL_LIMIT: z.coerce.number().int().min(1).max(2_000).default(1_000),
+  TRADE_POLL_TAKER_ONLY: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  MIN_TRADE_USD_TO_STORE: z.coerce.number().min(0).default(25),
+  MAX_TRADES_PER_POLL_CYCLE: z.coerce.number().int().min(1).max(10_000).default(500),
+  MAX_MARKETS_PER_TRADE_POLL: z.coerce.number().int().min(1).max(1_000).default(50),
+  SKIP_DUPLICATE_BEFORE_INSERT: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
   MARKET_DISCOVERY_INTERVAL_MS: z.coerce.number().int().min(10_000).default(180_000),
   TRADE_POLL_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
   TRADE_BATCH_SIZE: z.coerce.number().int().min(1).max(5_000).default(500),
@@ -37,7 +51,7 @@ export const workerConfigSchema = z.object({
     .default("true")
     .transform((value) => value === "true"),
   WALLET_ANALYSIS_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
-  SMART_MONEY_MIN_VOLUME_USD: z.coerce.number().min(0).default(10_000),
+  SMART_MONEY_MIN_VOLUME_USD: z.coerce.number().min(0).default(1),
   WALLET_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(90).default(7),
   COORDINATED_ACTIVITY_THRESHOLD: z.coerce.number().int().min(2).default(4),
   RECONNECT_MIN_MS: z.coerce.number().int().min(250).default(1_000),

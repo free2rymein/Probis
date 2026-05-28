@@ -8,7 +8,9 @@ import type { createWorkerRepositories } from "../repositories";
 import { PolymarketClient } from "../services/polymarket-client";
 import type { NormalizedTrade, ReplayEvent } from "../types/events";
 import type { PolymarketTrade } from "../types/polymarket";
+import { errorFields } from "../utils/errors";
 import { logger } from "../utils/logger";
+import { serializeForHash, serializeJson } from "../utils/serialization";
 import { jitter, sleep } from "../utils/time";
 
 type Repositories = ReturnType<typeof createWorkerRepositories>;
@@ -17,6 +19,10 @@ export class TradeIngestionWorker {
   private stopped = false;
   private lastSeenTradeAt = new Map<string, Date>();
   private seenTradeIds = new Set<string>();
+  private pollAcceptedTrades = 0;
+  private pollSkippedSmallTrades = 0;
+  private pollSkippedCapTrades = 0;
+  private pollDuplicateTrades = 0;
   private readonly aggregator = new OneMinuteAggregator();
   private readonly tradeBatcher: Batcher<NormalizedTrade>;
   private readonly timelineBatcher: Batcher<ReplayEvent>;
@@ -32,9 +38,22 @@ export class TradeIngestionWorker {
       maxSize: config.TRADE_BATCH_SIZE,
       flushIntervalMs: config.TRADE_FLUSH_INTERVAL_MS,
       flush: async (trades) => {
-        const inserted = await this.repositories.trades.appendMany(trades);
-        logger.info("trades.inserted", { attempted: trades.length, inserted: inserted.length });
-        logger.info("polymarket.trade_deduped", { skipped: trades.length - inserted.length });
+        const { unique, duplicates } = this.config.SKIP_DUPLICATE_BEFORE_INSERT
+          ? this.dedupeNormalizedTrades(trades)
+          : { unique: trades, duplicates: 0 };
+        const inserted = await this.repositories.trades.appendMany(unique);
+        logger.info("trades.inserted", {
+          attempted: trades.length,
+          uniqueAttempted: unique.length,
+          inserted: inserted.length,
+          duplicateInBatch: duplicates,
+          duplicateInDatabase: unique.length - inserted.length
+        });
+        logger.info("polymarket.trade_deduped", {
+          skipped: trades.length - inserted.length,
+          duplicateInBatch: duplicates,
+          duplicateInDatabase: unique.length - inserted.length
+        });
       }
     });
 
@@ -59,7 +78,7 @@ export class TradeIngestionWorker {
     this.timelineBatcher.start();
     this.startAggregateFlushLoop();
 
-    if (this.config.POLYMARKET_WS_URL) {
+    if (this.config.POLYMARKET_TRADE_SOURCE === "clob" && this.config.POLYMARKET_WS_URL) {
       void this.runWebSocket();
     }
 
@@ -94,7 +113,7 @@ export class TradeIngestionWorker {
 
     const marketRefs = await this.repositories.markets.listActiveMarketRefs(
       "polymarket",
-      this.config.MAX_MARKETS_PER_POLL
+      Math.min(this.config.MAX_MARKETS_PER_POLL, this.config.MAX_MARKETS_PER_TRADE_POLL)
     );
 
     if (marketRefs.length === 0) {
@@ -104,8 +123,106 @@ export class TradeIngestionWorker {
 
     logger.info("polymarket.trade_poll.start", {
       markets: marketRefs.length,
-      limit: this.config.TRADE_POLL_LIMIT
+      limit: this.config.TRADE_POLL_LIMIT,
+      source: this.config.POLYMARKET_TRADE_SOURCE,
+      minTradeUsdToStore: this.config.MIN_TRADE_USD_TO_STORE,
+      maxTradesPerPollCycle: this.config.MAX_TRADES_PER_POLL_CYCLE
     });
+    this.pollAcceptedTrades = 0;
+    this.pollSkippedSmallTrades = 0;
+    this.pollSkippedCapTrades = 0;
+    this.pollDuplicateTrades = 0;
+
+    if (this.config.POLYMARKET_TRADE_SOURCE === "clob") {
+      await this.pollClobTrades(marketRefs);
+      return;
+    }
+
+    await this.pollDataApiTrades(marketRefs);
+  }
+
+  private async pollDataApiTrades(
+    marketRefs: Array<{
+      id: string;
+      externalId: string;
+      conditionId: string | null;
+      clobTokenIds: string[];
+    }>
+  ) {
+    const marketByConditionId = new Map<string, { id: string; externalId: string }>();
+    const conditionIds = marketRefs
+      .map((market) => market.conditionId ?? market.externalId)
+      .filter((conditionId): conditionId is string => Boolean(conditionId));
+
+    for (const market of marketRefs) {
+      const conditionId = market.conditionId ?? market.externalId;
+      if (conditionId) {
+        marketByConditionId.set(conditionId, { id: market.id, externalId: market.externalId });
+      }
+    }
+
+    logger.info("polymarket.data_api.trade_poll.start", {
+      markets: conditionIds.length,
+      limit: this.config.TRADE_POLL_LIMIT,
+      marketsPerRequest: this.config.TRADE_MARKETS_PER_REQUEST,
+      takerOnly: this.config.TRADE_POLL_TAKER_ONLY
+    });
+
+    let rawCount = 0;
+    let normalizedCount = 0;
+
+    for (const chunk of this.chunk(conditionIds, this.config.TRADE_MARKETS_PER_REQUEST)) {
+      try {
+        const trades = this.dedupeRawTrades(await this.client.fetchDataApiTrades(chunk));
+        rawCount += trades.length;
+
+        for (const trade of trades) {
+          const conditionId =
+            trade.conditionId ??
+            trade.condition_id ??
+            trade.marketId ??
+            trade.market_id ??
+            trade.market;
+          if (!conditionId) {
+            logger.warn("market_mapping.failed", { reason: "missing_condition_id" });
+            continue;
+          }
+
+          const market = marketByConditionId.get(conditionId);
+          if (!market) {
+            logger.warn("market_mapping.failed", { conditionId });
+            continue;
+          }
+
+          normalizedCount += this.handleRawTrades(conditionId, market.id, [trade]);
+        }
+      } catch (error) {
+        logger.warn("polymarket.data_api.trade_chunk.failed", {
+          markets: chunk.length,
+          ...errorFields(error)
+        });
+      }
+    }
+
+    logger.info("polymarket.data_api.trade_poll.complete", {
+      markets: conditionIds.length,
+      rawTrades: rawCount,
+      normalizedTrades: normalizedCount,
+      acceptedTrades: this.pollAcceptedTrades,
+      skippedSmallTrades: this.pollSkippedSmallTrades,
+      skippedCapTrades: this.pollSkippedCapTrades,
+      duplicateTrades: this.pollDuplicateTrades
+    });
+  }
+
+  private async pollClobTrades(
+    marketRefs: Array<{
+      id: string;
+      externalId: string;
+      conditionId: string | null;
+      clobTokenIds: string[];
+    }>
+  ) {
     let rawCount = 0;
     let normalizedCount = 0;
 
@@ -122,7 +239,7 @@ export class TradeIngestionWorker {
         logger.warn("polymarket.trade_poll.market_failed", {
           externalId: market.externalId,
           conditionId: market.conditionId,
-          message: error instanceof Error ? error.message : "Unknown trade polling error"
+          ...errorFields(error)
         });
       }
     }
@@ -130,7 +247,11 @@ export class TradeIngestionWorker {
     logger.info("polymarket.trade_poll.complete", {
       markets: marketRefs.length,
       rawTrades: rawCount,
-      normalizedTrades: normalizedCount
+      normalizedTrades: normalizedCount,
+      acceptedTrades: this.pollAcceptedTrades,
+      skippedSmallTrades: this.pollSkippedSmallTrades,
+      skippedCapTrades: this.pollSkippedCapTrades,
+      duplicateTrades: this.pollDuplicateTrades
     });
   }
 
@@ -143,7 +264,7 @@ export class TradeIngestionWorker {
       } catch (error) {
         logger.warn("polymarket.trade_poll.token_failed", {
           tokenId,
-          message: error instanceof Error ? error.message : "Unknown token trade polling error"
+          ...errorFields(error)
         });
       }
     }
@@ -157,11 +278,23 @@ export class TradeIngestionWorker {
     for (const trade of trades) {
       const id =
         trade.transactionHash ??
+        trade.transaction_hash ??
         trade.txHash ??
         trade.tradeId ??
+        trade.trade_id ??
         trade.id ??
         trade.orderHash ??
-        `${trade.market ?? trade.conditionId ?? trade.asset ?? "unknown"}-${trade.timestamp ?? ""}`;
+        [
+          trade.market ?? trade.marketId ?? trade.conditionId ?? trade.condition_id ?? "unknown",
+          trade.asset ?? trade.assetId ?? trade.tokenId ?? trade.token_id ?? "",
+          trade.proxyWallet ?? trade.proxy_wallet ?? trade.walletAddress ?? trade.wallet ?? "",
+          trade.side ?? "",
+          trade.timestamp,
+          trade.price,
+          trade.size ?? trade.amount ?? trade.shares
+        ]
+          .map(serializeForHash)
+          .join("|");
       unique.set(id, trade);
     }
 
@@ -182,14 +315,43 @@ export class TradeIngestionWorker {
       this.lastSeenTradeAt.set(externalMarketId, newest);
     }
 
-    this.handleTrades(normalized);
-    return normalized.length;
+    const accepted = this.filterTradesForStorage(normalized);
+    this.handleTrades(accepted);
+    return accepted.length;
+  }
+
+  private filterTradesForStorage(trades: NormalizedTrade[]) {
+    if (this.config.WORKER_MODE !== "live") return trades;
+
+    const accepted: NormalizedTrade[] = [];
+
+    for (const trade of trades) {
+      const usdValue = Number(trade.usdValue);
+      if (!Number.isFinite(usdValue) || usdValue < this.config.MIN_TRADE_USD_TO_STORE) {
+        this.pollSkippedSmallTrades += 1;
+        continue;
+      }
+
+      if (this.pollAcceptedTrades >= this.config.MAX_TRADES_PER_POLL_CYCLE) {
+        this.pollSkippedCapTrades += 1;
+        continue;
+      }
+
+      accepted.push(trade);
+      this.pollAcceptedTrades += 1;
+    }
+
+    return accepted;
   }
 
   private handleTrades(trades: NormalizedTrade[]) {
     for (const trade of trades) {
       if (this.seenTradeIds.has(trade.transactionHash)) {
+        this.pollDuplicateTrades += 1;
         logger.info("polymarket.trade_deduped", { transactionHash: trade.transactionHash });
+        logger.info("polymarket.data_api.trade_deduped", {
+          transactionHash: trade.transactionHash
+        });
         continue;
       }
       this.seenTradeIds.add(trade.transactionHash);
@@ -204,7 +366,7 @@ export class TradeIngestionWorker {
         marketId: trade.marketId,
         eventType: this.config.WORKER_MODE === "live" ? "live_trade_ingested" : "trade",
         eventTimestamp: trade.tradeTimestamp,
-        payload: {
+        payload: serializeJson({
           source: trade.source,
           side: trade.side,
           price: trade.price,
@@ -214,8 +376,8 @@ export class TradeIngestionWorker {
           transactionHash: trade.transactionHash,
           clobTokenId: trade.clobTokenId,
           outcome: trade.outcome,
-          metadata: trade.metadata
-        }
+          metadata: serializeJson(trade.metadata)
+        })
       });
 
       logger.info("wallet_address.mapped", {
@@ -224,6 +386,21 @@ export class TradeIngestionWorker {
         source: trade.source
       });
     }
+  }
+
+  private dedupeNormalizedTrades(trades: NormalizedTrade[]) {
+    const unique = new Map<string, NormalizedTrade>();
+    let duplicates = 0;
+
+    for (const trade of trades) {
+      if (unique.has(trade.transactionHash)) {
+        duplicates += 1;
+        continue;
+      }
+      unique.set(trade.transactionHash, trade);
+    }
+
+    return { unique: [...unique.values()], duplicates };
   }
 
   private startAggregateFlushLoop() {
@@ -237,19 +414,27 @@ export class TradeIngestionWorker {
           marketId: candle.marketId,
           eventType: "aggregate_updated",
           eventTimestamp: candle.bucket,
-          payload: {
+          payload: serializeJson({
             open: candle.open,
             high: candle.high,
             low: candle.low,
             close: candle.close,
             volume: candle.volume,
             tradeCount: candle.tradeCount
-          }
+          })
         }))
       );
       this.bus.publish({ type: "aggregate.flush", payload: { count: candles.length } });
       logger.info("aggregates.flushed", { count: candles.length });
     }, this.config.AGGREGATE_FLUSH_INTERVAL_MS);
+  }
+
+  private chunk<T>(items: T[], size: number) {
+    const chunks: T[][] = [];
+    for (let index = 0; index < items.length; index += size) {
+      chunks.push(items.slice(index, index + size));
+    }
+    return chunks;
   }
 
   private async runWebSocket() {
@@ -275,7 +460,7 @@ export class TradeIngestionWorker {
             logger.info("websocket.message", { count: events.length });
           })().catch((error: unknown) => {
             logger.warn("websocket.handle_failed", {
-              message: error instanceof Error ? error.message : "Unknown websocket error"
+              ...errorFields(error)
             });
           });
         });
@@ -286,7 +471,7 @@ export class TradeIngestionWorker {
         });
 
         ws.on("error", (error) => {
-          logger.error("websocket.error", { message: error.message });
+          logger.error("websocket.error", { ...errorFields(error) });
           ws.close();
         });
       });

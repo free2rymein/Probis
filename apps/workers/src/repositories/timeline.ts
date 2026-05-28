@@ -1,5 +1,6 @@
 import { marketTimeline, type ProbisDatabase } from "@probis/database";
 import type { ReplayEvent } from "../types/events";
+import { serializeJson } from "../utils/serialization";
 
 export const createTimelineRepository = (db: ProbisDatabase) => ({
   async appendMany(events: ReplayEvent[]) {
@@ -12,7 +13,7 @@ export const createTimelineRepository = (db: ProbisDatabase) => ({
           marketId: event.marketId,
           eventType: event.eventType,
           eventTimestamp: event.eventTimestamp,
-          payload: event.payload
+          payload: serializeJson(event.payload)
         }))
       )
       .returning();

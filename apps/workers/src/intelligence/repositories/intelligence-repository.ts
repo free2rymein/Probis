@@ -13,6 +13,7 @@ import type {
   IntelligenceAnomalyType,
   LargeTrade
 } from "../types";
+import { serializeJson } from "../../utils/serialization";
 
 const toNumber = (value: string | number | null): number => Number(value ?? 0);
 
@@ -78,7 +79,7 @@ export const createIntelligenceRepository = (db: ProbisDatabase) => ({
         confidenceScore: String(candidate.confidenceScore),
         summary: candidate.summary,
         walletAddresses: candidate.walletAddresses,
-        metadata: candidate.metadata,
+        metadata: serializeJson(candidate.metadata),
         detectedAt: candidate.detectedAt
       })
       .returning({ id: anomalyEvents.id });

@@ -5,6 +5,7 @@ import { detectWhaleActivity } from "./anomaly-detectors/whale-activity";
 import type { IntelligenceConfig } from "./config";
 import type { IntelligenceRepository } from "./repositories/intelligence-repository";
 import type { AnomalyCandidate } from "./types";
+import { errorFields } from "../utils/errors";
 import { logger } from "../utils/logger";
 import { jitter, sleep } from "../utils/time";
 
@@ -38,7 +39,7 @@ export class IntelligenceEngine {
         await this.runOnce();
       } catch (error) {
         logger.error("intelligence_engine.error", {
-          message: error instanceof Error ? error.message : "Unknown intelligence engine error"
+          ...errorFields(error)
         });
       }
 

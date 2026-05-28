@@ -1,4 +1,5 @@
 import type { WorkerConfig } from "../config/env";
+import { errorFields } from "./errors";
 import { logger } from "./logger";
 import { jitter, sleep } from "./time";
 
@@ -34,7 +35,7 @@ export async function fetchJson<T>(url: URL, config: WorkerConfig): Promise<T> {
       logger.warn("http.retry", {
         url: url.origin + url.pathname,
         attempt,
-        message: error instanceof Error ? error.message : "Unknown HTTP error"
+        ...errorFields(error)
       });
       await sleep(jitter(500 * 2 ** attempt));
     } finally {

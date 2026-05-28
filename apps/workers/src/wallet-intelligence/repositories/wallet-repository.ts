@@ -7,6 +7,8 @@ import type {
   WalletProfileInput,
   WalletScores
 } from "../types";
+import { logger } from "../../utils/logger";
+import { serializeJson } from "../../utils/serialization";
 
 const rows = <T>(result: unknown): T[] => {
   if (Array.isArray(result)) return result as T[];
@@ -17,24 +19,101 @@ const rows = <T>(result: unknown): T[] => {
 };
 
 const toDate = (value: Date | string) => (value instanceof Date ? value : new Date(value));
+const toIso = (value: Date | string) => (value instanceof Date ? value.toISOString() : value);
+const toDateOnly = (value: Date | string) => toIso(value).slice(0, 10);
 const toNumber = (value: string | number | null) => Number(value ?? 0);
+const invalidWalletSql = sql`
+  wallet_address IS NULL
+  OR wallet_address = ''
+  OR wallet_address = '0x0000000000000000000000000000000000000000'
+  OR wallet_address = '0x0000000000000000000000000000000000000001'
+`;
+
+const textArraySql = (values: string[]) => {
+  if (values.length === 0) return sql`ARRAY[]::text[]`;
+  return sql`ARRAY[${sql.join(
+    values.map((value) => sql`${value}`),
+    sql`, `
+  )}]::text[]`;
+};
+
+const textInSql = (values: string[]) =>
+  sql`(${sql.join(
+    values.map((value) => sql`${value}`),
+    sql`, `
+  )})`;
 
 export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
+  async getRecentTradeStats(since: Date) {
+    const sinceIso = since.toISOString();
+    const [summary] = rows<{
+      recent_trades_count: string;
+      unique_wallet_count: string;
+      valid_wallet_count: string;
+      skipped_invalid_wallet_count: string;
+      total_volume_analyzed: string | null;
+    }>(
+      await db.execute(sql`
+        SELECT
+          COUNT(*)::text AS recent_trades_count,
+          COUNT(DISTINCT wallet_address)::text AS unique_wallet_count,
+          COUNT(DISTINCT wallet_address) FILTER (WHERE NOT (${invalidWalletSql}))::text
+            AS valid_wallet_count,
+          COUNT(*) FILTER (WHERE ${invalidWalletSql})::text AS skipped_invalid_wallet_count,
+          COALESCE(SUM(usd_value::numeric), 0)::text AS total_volume_analyzed
+        FROM trades
+        WHERE trade_timestamp >= ${sinceIso}
+      `)
+    );
+
+    const tableBreakdown = rows<{ table_name: string; trade_count: string }>(
+      await db.execute(sql`
+        SELECT tableoid::regclass::text AS table_name, COUNT(*)::text AS trade_count
+        FROM trades
+        WHERE trade_timestamp >= ${sinceIso}
+        GROUP BY tableoid::regclass::text
+        ORDER BY COUNT(*) DESC
+      `)
+    );
+
+    return {
+      recentTradesCount: Number(summary?.recent_trades_count ?? 0),
+      uniqueWalletCount: Number(summary?.unique_wallet_count ?? 0),
+      validWalletCount: Number(summary?.valid_wallet_count ?? 0),
+      skippedInvalidWalletCount: Number(summary?.skipped_invalid_wallet_count ?? 0),
+      totalVolumeAnalyzed: Number(summary?.total_volume_analyzed ?? 0),
+      tableBreakdown: tableBreakdown.map((row) => ({
+        tableName: row.table_name,
+        tradeCount: Number(row.trade_count)
+      }))
+    };
+  },
+
   async getRecentWalletProfiles(
     since: Date,
     largeTradeThresholdUsd: number,
     limit: number
   ): Promise<WalletProfileInput[]> {
+    const sinceIso = since.toISOString();
     const result = await db.execute(sql`
       WITH recent_trades AS (
         SELECT wallet_address, market_id, usd_value::numeric AS usd_value, trade_timestamp
         FROM trades
-        WHERE trade_timestamp >= ${since}
+        WHERE trade_timestamp >= ${sinceIso}
+          AND NOT (${invalidWalletSql})
       ),
       wallet_market AS (
         SELECT wallet_address, market_id, SUM(usd_value) AS market_volume
         FROM recent_trades
         GROUP BY wallet_address, market_id
+      ),
+      wallet_market_rollup AS (
+        SELECT
+          wallet_address,
+          COUNT(*)::int AS active_market_count,
+          MAX(market_volume) AS largest_market_volume
+        FROM wallet_market
+        GROUP BY wallet_address
       ),
       wallet_anomalies AS (
         SELECT
@@ -42,7 +121,7 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
           COUNT(*)::int AS anomaly_trigger_count,
           COUNT(DISTINCT market_id)::int AS high_signal_market_count
         FROM anomaly_events
-        WHERE detected_at >= ${since}
+        WHERE detected_at >= ${sinceIso}
           AND array_length(wallet_addresses, 1) > 0
         GROUP BY 1
       )
@@ -52,18 +131,20 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
         MAX(rt.trade_timestamp) AS last_seen_at,
         SUM(rt.usd_value)::text AS total_volume_usd,
         COUNT(*)::int AS total_trade_count,
-        COUNT(DISTINCT rt.market_id)::int AS active_market_count,
+        COALESCE(wmr.active_market_count, 0)::int AS active_market_count,
         COUNT(*) FILTER (WHERE rt.usd_value >= ${largeTradeThresholdUsd})::int AS large_trade_count,
         AVG(rt.usd_value)::text AS average_trade_usd,
         MAX(rt.usd_value)::text AS max_trade_usd,
         COALESCE(wa.anomaly_trigger_count, 0)::int AS anomaly_trigger_count,
         COALESCE(wa.high_signal_market_count, 0)::int AS high_signal_market_count,
-        (MAX(wm.market_volume) / NULLIF(SUM(rt.usd_value), 0))::text AS market_concentration
+        (wmr.largest_market_volume / NULLIF(SUM(rt.usd_value), 0))::text AS market_concentration
       FROM recent_trades rt
-      INNER JOIN wallet_market wm ON wm.wallet_address = rt.wallet_address
+      LEFT JOIN wallet_market_rollup wmr ON wmr.wallet_address = rt.wallet_address
       LEFT JOIN wallet_anomalies wa ON wa.wallet_address = rt.wallet_address
-      GROUP BY rt.wallet_address, wa.anomaly_trigger_count, wa.high_signal_market_count
+      GROUP BY rt.wallet_address, wmr.active_market_count, wmr.largest_market_volume,
+        wa.anomaly_trigger_count, wa.high_signal_market_count
       HAVING SUM(rt.usd_value) > 0
+        AND COUNT(*) >= 1
       ORDER BY SUM(rt.usd_value) DESC
       LIMIT ${limit}
     `);
@@ -102,6 +183,14 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
     walletAddresses: string[]
   ): Promise<WalletMarketInput[]> {
     if (walletAddresses.length === 0) return [];
+    const sinceIso = since.toISOString();
+    logger.info("wallet_intelligence.array_query_params", {
+      queryName: "getRecentWalletMarketActivity",
+      walletCount: walletAddresses.length,
+      marketCount: 0,
+      sampleWallet: walletAddresses[0],
+      sampleMarketId: null
+    });
     const result = await db.execute(sql`
       SELECT
         wallet_address,
@@ -112,8 +201,9 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
           AS net_position_estimate,
         MAX(trade_timestamp) AS last_trade_at
       FROM trades
-      WHERE trade_timestamp >= ${since}
-        AND wallet_address = ANY(${walletAddresses})
+      WHERE trade_timestamp >= ${sinceIso}
+        AND wallet_address IN ${textInSql(walletAddresses)}
+        AND NOT (${invalidWalletSql})
       GROUP BY wallet_address, market_id
     `);
 
@@ -139,6 +229,14 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
     walletAddresses: string[]
   ): Promise<WalletDailyInput[]> {
     if (walletAddresses.length === 0) return [];
+    const sinceIso = since.toISOString();
+    logger.info("wallet_intelligence.array_query_params", {
+      queryName: "getRecentWalletDailyStats",
+      walletCount: walletAddresses.length,
+      marketCount: 0,
+      sampleWallet: walletAddresses[0],
+      sampleMarketId: null
+    });
     const result = await db.execute(sql`
       WITH wallet_days AS (
         SELECT
@@ -148,8 +246,9 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
           COUNT(*)::int AS trade_count,
           COUNT(DISTINCT market_id)::int AS active_markets
         FROM trades
-        WHERE trade_timestamp >= ${since}
-          AND wallet_address = ANY(${walletAddresses})
+        WHERE trade_timestamp >= ${sinceIso}
+          AND wallet_address IN ${textInSql(walletAddresses)}
+          AND NOT (${invalidWalletSql})
         GROUP BY wallet_address, date_trunc('day', trade_timestamp)
       ),
       anomaly_days AS (
@@ -158,7 +257,7 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
           date_trunc('day', detected_at) AS bucket_date,
           COUNT(*)::int AS anomaly_count
         FROM anomaly_events
-        WHERE detected_at >= ${since}
+        WHERE detected_at >= ${sinceIso}
           AND array_length(wallet_addresses, 1) > 0
         GROUP BY 1, 2
       )
@@ -192,11 +291,11 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
   },
 
   async upsertProfiles(profiles: Array<WalletProfileInput & WalletScores>) {
-    if (profiles.length === 0) return;
+    if (profiles.length === 0) return 0;
     const values = profiles.map((profile) => ({
       walletAddress: profile.walletAddress,
-      firstSeenAt: profile.firstSeenAt,
-      lastSeenAt: profile.lastSeenAt,
+      firstSeenAt: toIso(profile.firstSeenAt),
+      lastSeenAt: toIso(profile.lastSeenAt),
       totalVolumeUsd: String(profile.totalVolumeUsd),
       totalTradeCount: profile.totalTradeCount,
       smartMoneyScore: String(profile.smartMoneyScore),
@@ -204,8 +303,8 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
       influenceScore: String(profile.influenceScore),
       activeMarketCount: profile.activeMarketCount,
       anomalyTriggerCount: profile.anomalyTriggerCount,
-      lastActiveAt: profile.lastSeenAt,
-      metadata: profile.metadata
+      lastActiveAt: toIso(profile.lastSeenAt),
+      metadata: serializeJson(profile.metadata)
     }));
 
     await db.execute(
@@ -215,7 +314,7 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
         smart_money_score, conviction_score, influence_score, active_market_count,
         anomaly_trigger_count, last_active_at, metadata
       )
-      SELECT * FROM jsonb_to_recordset(${JSON.stringify(values)}::jsonb) AS x(
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(serializeJson(values))}::jsonb) AS x(
         "walletAddress" text,
         "firstSeenAt" timestamptz,
         "lastSeenAt" timestamptz,
@@ -243,16 +342,21 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
         metadata = excluded.metadata
     ` as SQL
     );
+    return profiles.length;
   },
 
   async upsertMarketActivity(items: WalletMarketInput[]) {
-    if (items.length === 0) return;
+    if (items.length === 0) return 0;
+    const values = items.map((item) => ({
+      ...item,
+      lastTradeAt: toIso(item.lastTradeAt)
+    }));
     await db.execute(
       sql`
       INSERT INTO wallet_market_activity (
         wallet_address, market_id, total_volume_usd, trade_count, net_position_estimate, last_trade_at
       )
-      SELECT * FROM jsonb_to_recordset(${JSON.stringify(items)}::jsonb) AS x(
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(serializeJson(values))}::jsonb) AS x(
         "walletAddress" text,
         "marketId" uuid,
         "totalVolumeUsd" numeric,
@@ -267,16 +371,21 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
         last_trade_at = excluded.last_trade_at
     ` as SQL
     );
+    return items.length;
   },
 
   async upsertDailyStats(items: WalletDailyInput[]) {
-    if (items.length === 0) return;
+    if (items.length === 0) return 0;
+    const values = items.map((item) => ({
+      ...item,
+      bucketDate: toDateOnly(item.bucketDate)
+    }));
     await db.execute(
       sql`
       INSERT INTO wallet_daily_stats (
         wallet_address, bucket_date, total_volume_usd, trade_count, active_markets, anomaly_count
       )
-      SELECT * FROM jsonb_to_recordset(${JSON.stringify(items)}::jsonb) AS x(
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(serializeJson(values))}::jsonb) AS x(
         "walletAddress" text,
         "bucketDate" timestamptz,
         "totalVolumeUsd" numeric,
@@ -291,6 +400,7 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
         anomaly_count = excluded.anomaly_count
     ` as SQL
     );
+    return items.length;
   },
 
   async getCoordinatedActivityCandidates(
@@ -298,6 +408,7 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
     threshold: number,
     minVolumeUsd: number
   ): Promise<CoordinatedActivityCandidate[]> {
+    const sinceIso = since.toISOString();
     const result = await db.execute(sql`
       SELECT
         market_id,
@@ -307,7 +418,7 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
         MIN(trade_timestamp) AS started_at,
         MAX(trade_timestamp) AS ended_at
       FROM trades
-      WHERE trade_timestamp >= ${since}
+      WHERE trade_timestamp >= ${sinceIso}
         AND usd_value::numeric >= ${minVolumeUsd}
       GROUP BY market_id, date_trunc('minute', trade_timestamp)
       HAVING COUNT(DISTINCT wallet_address) >= ${threshold}
@@ -333,12 +444,13 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
   },
 
   async findRecentDuplicate(marketId: string, anomalyType: string, since: Date) {
+    const sinceIso = since.toISOString();
     const result = await db.execute(sql`
       SELECT id
       FROM anomaly_events
       WHERE market_id = ${marketId}
         AND anomaly_type::text = ${anomalyType}
-        AND created_at >= ${since}
+        AND created_at >= ${sinceIso}
       LIMIT 1
     `);
 
@@ -355,6 +467,14 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
     metadata: Record<string, unknown>;
     detectedAt: Date;
   }) {
+    const detectedAtIso = input.detectedAt.toISOString();
+    logger.info("wallet_intelligence.array_query_params", {
+      queryName: "insertWalletAnomaly",
+      walletCount: input.walletAddresses.length,
+      marketCount: 1,
+      sampleWallet: input.walletAddresses[0] ?? null,
+      sampleMarketId: input.marketId
+    });
     await db.execute(sql`
       INSERT INTO anomaly_events (
         market_id, anomaly_type, severity_score, confidence_score, summary,
@@ -366,9 +486,9 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
         ${String(input.severityScore)},
         ${String(input.confidenceScore)},
         ${input.summary},
-        ${input.walletAddresses},
-        ${JSON.stringify(input.metadata)}::jsonb,
-        ${input.detectedAt}
+        ${textArraySql(input.walletAddresses)},
+        ${JSON.stringify(serializeJson(input.metadata))}::jsonb,
+        ${detectedAtIso}
       )
     `);
   }

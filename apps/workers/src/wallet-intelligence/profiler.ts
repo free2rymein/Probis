@@ -1,4 +1,5 @@
 import type { WorkerConfig } from "../config/env";
+import { errorFields } from "../utils/errors";
 import { logger } from "../utils/logger";
 import { jitter, sleep } from "../utils/time";
 import { activeWhaleProfiles, summarizeCoActivity } from "./analytics/activity";
@@ -35,7 +36,7 @@ export class WalletIntelligenceProfiler {
         await this.runOnce();
       } catch (error) {
         logger.error("wallet_intelligence.error", {
-          message: error instanceof Error ? error.message : "Unknown wallet intelligence error"
+          ...errorFields(error)
         });
       }
 
@@ -50,18 +51,56 @@ export class WalletIntelligenceProfiler {
   async runOnce() {
     const startedAt = Date.now();
     const since = new Date(startedAt - this.config.WALLET_LOOKBACK_DAYS * 24 * 60 * 60_000);
+    const sinceIso = since.toISOString();
     const profileLimit = Math.max(200, this.config.INTELLIGENCE_MAX_MARKETS_PER_RUN * 5);
 
     logger.info("wallet_intelligence.run", {
-      since: since.toISOString(),
+      since: sinceIso,
       profileLimit
     });
+    logger.info("wallet_intelligence.query_params", {
+      since: since.toString(),
+      sinceType: typeof since,
+      sinceIso,
+      profileLimit
+    });
+
+    const tradeStats = await this.repository.getRecentTradeStats(since);
+    logger.info("wallet_intelligence.recent_trades_found", {
+      recentTradesCount: tradeStats.recentTradesCount,
+      uniqueWalletCount: tradeStats.uniqueWalletCount,
+      validWalletCount: tradeStats.validWalletCount,
+      skippedInvalidWalletCount: tradeStats.skippedInvalidWalletCount,
+      totalVolumeAnalyzed: tradeStats.totalVolumeAnalyzed,
+      tableBreakdown: JSON.stringify(tradeStats.tableBreakdown)
+    });
+
+    if (tradeStats.recentTradesCount === 0) {
+      logger.info("wallet_intelligence.skipped_reason", {
+        reason: "no_recent_trades",
+        since: since.toISOString()
+      });
+    }
 
     const profileInputs = await this.repository.getRecentWalletProfiles(
       since,
       this.config.WHALE_TRADE_USD_THRESHOLD,
       profileLimit
     );
+    logger.info("wallet_intelligence.wallet_candidates_found", {
+      candidates: profileInputs.length,
+      validWalletCount: tradeStats.validWalletCount,
+      totalVolumeAnalyzed: profileInputs.reduce((sum, profile) => sum + profile.totalVolumeUsd, 0)
+    });
+
+    if (tradeStats.recentTradesCount > 0 && profileInputs.length === 0) {
+      logger.info("wallet_intelligence.skipped_reason", {
+        reason: "recent_trades_but_no_wallet_candidates",
+        validWalletCount: tradeStats.validWalletCount,
+        skippedInvalidWalletCount: tradeStats.skippedInvalidWalletCount
+      });
+    }
+
     const walletAddresses = profileInputs.map((profile) => profile.walletAddress);
     const marketActivity = await this.repository.getRecentWalletMarketActivity(
       since,
@@ -74,9 +113,20 @@ export class WalletIntelligenceProfiler {
       ...scoreWalletProfile(profile, this.config.SMART_MONEY_MIN_VOLUME_USD)
     }));
 
-    await this.repository.upsertProfiles(scoredProfiles);
-    await this.repository.upsertMarketActivity(marketActivity);
-    await this.repository.upsertDailyStats(dailyStats);
+    const profilesUpserted = await this.repository.upsertProfiles(scoredProfiles);
+    logger.info("wallet_intelligence.wallet_profiles_upserted", {
+      rowsUpserted: profilesUpserted
+    });
+
+    const marketRowsUpserted = await this.repository.upsertMarketActivity(marketActivity);
+    logger.info("wallet_intelligence.wallet_market_activity_upserted", {
+      rowsUpserted: marketRowsUpserted
+    });
+
+    const dailyRowsUpserted = await this.repository.upsertDailyStats(dailyStats);
+    logger.info("wallet_intelligence.wallet_daily_stats_upserted", {
+      rowsUpserted: dailyRowsUpserted
+    });
 
     const whales = activeWhaleProfiles(profileInputs, this.config.WHALE_TRADE_USD_THRESHOLD);
     await this.emitRepeatWhaleSignals(
@@ -90,6 +140,11 @@ export class WalletIntelligenceProfiler {
       profilesUpdated: scoredProfiles.length,
       marketRowsUpdated: marketActivity.length,
       dailyRowsUpdated: dailyStats.length,
+      recentTradesCount: tradeStats.recentTradesCount,
+      uniqueWalletCount: tradeStats.uniqueWalletCount,
+      validWalletCount: tradeStats.validWalletCount,
+      skippedInvalidWalletCount: tradeStats.skippedInvalidWalletCount,
+      totalVolumeAnalyzed: tradeStats.totalVolumeAnalyzed,
       activeWhales: whales.length,
       durationMs: Date.now() - startedAt
     });

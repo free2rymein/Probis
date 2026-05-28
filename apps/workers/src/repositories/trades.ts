@@ -1,6 +1,7 @@
 import { inArray } from "drizzle-orm";
 import { trades, type ProbisDatabase } from "@probis/database";
 import type { NormalizedTrade } from "../types/events";
+import { serializeJson } from "../utils/serialization";
 
 export const createTradesRepository = (db: ProbisDatabase) => ({
   async existingTransactionHashes(hashes: string[]) {
@@ -36,7 +37,7 @@ export const createTradesRepository = (db: ProbisDatabase) => ({
           transactionHash: item.transactionHash,
           clobTokenId: item.clobTokenId,
           outcome: item.outcome,
-          metadata: item.metadata,
+          metadata: serializeJson(item.metadata),
           tradeTimestamp: item.tradeTimestamp
         }))
       )

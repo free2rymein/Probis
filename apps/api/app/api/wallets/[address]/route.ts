@@ -102,7 +102,7 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
         ae.created_at
       FROM anomaly_events ae
       INNER JOIN markets m ON m.id = ae.market_id
-      WHERE ${address} = ANY(ae.wallet_addresses)
+      WHERE ae.wallet_addresses @> ARRAY[${address}]::text[]
       ORDER BY ae.detected_at DESC
       LIMIT 20
     `,

@@ -1,6 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { markets, type ProbisDatabase } from "@probis/database";
 import type { NormalizedMarket } from "../types/events";
+import { serializeJson } from "../utils/serialization";
 
 export const createMarketsRepository = (db: ProbisDatabase) => ({
   async upsertMany(items: NormalizedMarket[]) {
@@ -22,7 +23,7 @@ export const createMarketsRepository = (db: ProbisDatabase) => ({
           currentProbability: item.currentProbability,
           volume24h: item.volume24h,
           liquidity: item.liquidity,
-          metadata: item.metadata,
+          metadata: serializeJson(item.metadata),
           resolutionDate: item.resolutionDate,
           updatedAt: new Date()
         }))
@@ -73,7 +74,9 @@ export const createMarketsRepository = (db: ProbisDatabase) => ({
     const [row] = await db
       .select({ id: markets.id })
       .from(markets)
-      .where(and(eq(markets.source, source), sql`${tokenId} = ANY(${markets.clobTokenIds})`))
+      .where(
+        and(eq(markets.source, source), sql`${markets.clobTokenIds} @> ARRAY[${tokenId}]::text[]`)
+      )
       .limit(1);
 
     return row?.id ?? null;
