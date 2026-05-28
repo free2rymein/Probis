@@ -10,12 +10,47 @@ export const workerConfigSchema = z.object({
   POLYMARKET_TRADE_SOURCE: z.enum(["data_api", "clob"]).default("data_api"),
   POLYMARKET_WS_URL: z.string().url().optional(),
   MARKET_SYNC_LIMIT: z.coerce.number().int().min(1).max(1_000).default(250),
+  MARKET_UNIVERSE_STRATEGY: z
+    .enum(["quality_ranked", "latest_active", "intelligence_weighted", "mvp_interest"])
+    .default("mvp_interest"),
+  ACTIVE_MARKET_UNIVERSE_LIMIT: z.coerce.number().int().min(1).max(1_000).default(100),
+  STORE_ONLY_ACTIVE_UNIVERSE: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  RAW_MARKET_FETCH_LIMIT: z.coerce.number().int().min(1).max(500).default(100),
+  MAX_MARKET_FETCH_PAGES: z.coerce.number().int().min(1).max(200).default(100),
+  MAX_DAYS_TO_RESOLUTION: z.coerce.number().int().min(1).max(365).default(45),
+  MIN_MARKET_LIQUIDITY: z.coerce.number().min(0).default(1_000),
+  MIN_MARKET_VOLUME_24H: z.coerce.number().min(0).default(500),
+  MIN_MARKET_VOLUME_TOTAL: z.coerce.number().min(0).default(5_000),
+  MIN_EXCEPTION_LIQUIDITY: z.coerce.number().min(0).default(250),
+  MIN_EXCEPTION_VOLUME_24H: z.coerce.number().min(0).default(100),
+  EXCLUDE_SPORTS_MARKETS: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  EXCLUDE_ESPORTS_MARKETS: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  EXCLUDE_MICRO_MARKETS: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  MARKET_QUALITY_VOLUME_WEIGHT: z.coerce.number().min(0).default(0.55),
+  MARKET_QUALITY_LIQUIDITY_WEIGHT: z.coerce.number().min(0).default(0.35),
+  MARKET_QUALITY_RECENCY_WEIGHT: z.coerce.number().min(0).default(0.1),
+  TIER_CORE_SHARE: z.coerce.number().min(0).max(1).default(0.5),
+  TIER_REPRICING_SHARE: z.coerce.number().min(0).max(1).default(0.3),
+  TIER_NARRATIVE_SHARE: z.coerce.number().min(0).max(1).default(0.15),
+  TIER_WATCHLIST_SHARE: z.coerce.number().min(0).max(1).default(0.05),
   MARKET_SYNC_ACTIVE_ONLY: z
     .enum(["true", "false"])
     .default("true")
     .transform((value) => value === "true"),
-  TRADE_MARKETS_PER_REQUEST: z.coerce.number().int().min(1).max(50).default(20),
-  TRADE_POLL_LIMIT: z.coerce.number().int().min(1).max(2_000).default(1_000),
+  TRADE_MARKETS_PER_REQUEST: z.coerce.number().int().min(1).max(50).default(5),
+  TRADE_POLL_LIMIT: z.coerce.number().int().min(1).max(2_000).default(100),
   TRADE_POLL_TAKER_ONLY: z
     .enum(["true", "false"])
     .default("true")
@@ -28,7 +63,7 @@ export const workerConfigSchema = z.object({
     .default("true")
     .transform((value) => value === "true"),
   MARKET_DISCOVERY_INTERVAL_MS: z.coerce.number().int().min(10_000).default(180_000),
-  TRADE_POLL_INTERVAL_MS: z.coerce.number().int().min(1_000).default(10_000),
+  TRADE_POLL_INTERVAL_MS: z.coerce.number().int().min(1_000).default(60_000),
   TRADE_BATCH_SIZE: z.coerce.number().int().min(1).max(5_000).default(500),
   TRADE_FLUSH_INTERVAL_MS: z.coerce.number().int().min(250).default(2_000),
   AGGREGATE_FLUSH_INTERVAL_MS: z.coerce.number().int().min(500).default(2_500),
@@ -57,7 +92,7 @@ export const workerConfigSchema = z.object({
   RECONNECT_MIN_MS: z.coerce.number().int().min(250).default(1_000),
   RECONNECT_MAX_MS: z.coerce.number().int().min(1_000).default(30_000),
   HTTP_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(15_000),
-  MAX_MARKETS_PER_POLL: z.coerce.number().int().min(1).max(1_000).default(200),
+  MAX_MARKETS_PER_POLL: z.coerce.number().int().min(1).max(1_000).default(100),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info")
 });
 

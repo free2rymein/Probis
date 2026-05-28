@@ -38,8 +38,20 @@ export const markets = pgTable(
       .notNull()
       .default(sql`ARRAY[]::text[]`),
     currentProbability: numeric("current_probability", { precision: 18, scale: 8 }),
+    currentProbabilityYes: numeric("current_probability_yes", { precision: 18, scale: 8 }),
+    currentProbabilityNo: numeric("current_probability_no", { precision: 18, scale: 8 }),
     volume24h: numeric("volume_24h", { precision: 30, scale: 8 }),
     liquidity: numeric("liquidity", { precision: 30, scale: 8 }),
+    isActiveUniverse: boolean("is_active_universe").notNull().default(false),
+    marketQualityScore: numeric("market_quality_score", { precision: 12, scale: 6 }),
+    universeTier: text("universe_tier"),
+    intelligenceWeightedScore: numeric("intelligence_weighted_score", { precision: 12, scale: 6 }),
+    repricingVelocityScore: numeric("repricing_velocity_score", { precision: 12, scale: 6 }),
+    narrativeRelevanceScore: numeric("narrative_relevance_score", { precision: 12, scale: 6 }),
+    walletActivityScore: numeric("wallet_activity_score", { precision: 12, scale: 6 }),
+    exclusionReason: text("exclusion_reason"),
+    universeRank: integer("universe_rank"),
+    lastSelectedAt: timestamp("last_selected_at", { withTimezone: true }),
     metadata: jsonb("metadata")
       .notNull()
       .default(sql`'{}'::jsonb`),
@@ -57,6 +69,16 @@ export const markets = pgTable(
     statusIdx: index("markets_status_idx").on(table.status),
     conditionIdIdx: index("markets_condition_id_idx").on(table.conditionId),
     clobTokenIdsGinIdx: index("markets_clob_token_ids_gin_idx").using("gin", table.clobTokenIds),
+    activeUniverseIdx: index("markets_is_active_universe_idx").on(table.isActiveUniverse),
+    qualityScoreDescIdx: index("markets_market_quality_score_desc_idx").on(
+      sql`${table.marketQualityScore} DESC`
+    ),
+    intelligenceScoreDescIdx: index("markets_intelligence_weighted_score_desc_idx").on(
+      sql`${table.intelligenceWeightedScore} DESC`
+    ),
+    universeTierIdx: index("markets_universe_tier_idx").on(table.universeTier),
+    volume24hDescIdx: index("markets_volume_24h_desc_idx").on(sql`${table.volume24h} DESC`),
+    liquidityDescIdx: index("markets_liquidity_desc_idx").on(sql`${table.liquidity} DESC`),
     slugIdx: uniqueIndex("markets_slug_uidx").on(table.slug)
   })
 );

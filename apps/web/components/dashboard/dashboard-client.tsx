@@ -57,6 +57,11 @@ export function DashboardClient() {
       icon: Radio
     },
     {
+      label: "Active universe",
+      value: formatCompactNumber(metrics.activeUniverseCount),
+      icon: Database
+    },
+    {
       label: "Volume / 24h",
       value: formatUsd(metrics.volume24h),
       icon: TrendingUp
@@ -107,6 +112,50 @@ export function DashboardClient() {
             <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">Open markets</span>
               <span className="font-mono">{formatCompactNumber(metrics.openMarketCount)}</span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Universe avg liquidity</span>
+              <span className="font-mono">{formatUsd(metrics.activeUniverseAvgLiquidity)}</span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Universe avg volume</span>
+              <span className="font-mono">{formatUsd(metrics.activeUniverseAvgVolume24h)}</span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Top quality market</span>
+              <span className="max-w-48 truncate font-mono">
+                {metrics.topMarketByQualityScore ?? "none"}
+              </span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Top categories</span>
+              <span className="max-w-56 truncate font-mono">
+                {metrics.topCategories.length
+                  ? metrics.topCategories
+                      .map((category) => `${category.category} ${category.count}`)
+                      .join(", ")
+                  : "none"}
+              </span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Tier mix</span>
+              <span className="max-w-56 truncate font-mono">
+                {metrics.tierDistribution.length
+                  ? metrics.tierDistribution.map((tier) => `${tier.tier} ${tier.count}`).join(", ")
+                  : "none"}
+              </span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Top repricing</span>
+              <span className="max-w-48 truncate font-mono">
+                {metrics.topRepricingMarkets[0]?.title ?? "none"}
+              </span>
+            </div>
+            <div className="border-border flex items-center justify-between rounded-md border p-3">
+              <span className="text-muted-foreground">Top narrative</span>
+              <span className="max-w-48 truncate font-mono">
+                {metrics.topNarrativeMarkets[0]?.title ?? "none"}
+              </span>
             </div>
             <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">High severity / 24h</span>

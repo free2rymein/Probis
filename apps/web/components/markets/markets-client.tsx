@@ -29,31 +29,51 @@ const statusVariant = {
 
 const sortLabels = {
   updated_at: "Updated",
+  quality: "Quality",
   volume: "Volume",
-  probability: "Probability",
+  probability: "YES %",
   title: "Title",
   status: "Status"
 } as const;
+
+const formatMarketProbability = (probability: number | null) => {
+  if (probability === null || !Number.isFinite(probability)) return "n/a";
+  if (probability <= 0.001) return "<1%";
+  if (probability >= 0.999) return ">99%";
+  return formatPercent(probability);
+};
+
+const formatQualityScore = (qualityScore: number | null) =>
+  qualityScore === null || !Number.isFinite(qualityScore) ? "Not ranked" : qualityScore.toFixed(3);
 
 function MarketRow({ market }: { market: MarketListItem }) {
   return (
     <TableRow>
       <TableCell className="min-w-72">
         <div className="text-foreground font-medium">{market.title}</div>
-        <div className="text-muted-foreground mt-1 text-xs">{market.category}</div>
+        <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-1 text-xs">
+          <span>{market.category}</span>
+          {market.isActiveUniverse ? (
+            <Badge variant="success">#{market.universeRank ?? "-"} tracked</Badge>
+          ) : null}
+        </div>
       </TableCell>
       <TableCell>
         <Badge variant="outline">{market.source}</Badge>
       </TableCell>
-      <TableCell className="font-mono">
-        {market.probability === null ? "n/a" : formatPercent(market.probability)}
-      </TableCell>
+      <TableCell className="font-mono">{formatMarketProbability(market.yesProbability)}</TableCell>
       <TableCell className="font-mono">{formatCompactNumber(market.volume24h)}</TableCell>
       <TableCell className="font-mono">
         {market.liquidity === null ? "n/a" : formatCompactNumber(market.liquidity)}
       </TableCell>
       <TableCell>
         <Badge variant={statusVariant[market.status]}>{market.status}</Badge>
+      </TableCell>
+      <TableCell className="font-mono">
+        {formatQualityScore(market.intelligenceWeightedScore ?? market.qualityScore)}
+        {market.exclusionReason ? (
+          <div className="text-muted-foreground mt-1 text-[10px]">{market.exclusionReason}</div>
+        ) : null}
       </TableCell>
       <TableCell className="text-muted-foreground whitespace-nowrap font-mono text-xs">
         {new Date(market.updatedAt).toLocaleString()}
@@ -65,7 +85,7 @@ function MarketRow({ market }: { market: MarketListItem }) {
 export function MarketsClient() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [sort, setSort] = useState<MarketsQuery["sort"]>("updated_at");
+  const [sort, setSort] = useState<MarketsQuery["sort"]>("quality");
   const [direction, setDirection] = useState<"asc" | "desc">("desc");
   const [offset, setOffset] = useState(0);
   const limit = 25;
@@ -76,6 +96,7 @@ export function MarketsClient() {
       offset,
       search,
       status,
+      activeUniverse: true,
       sort,
       direction
     }),
@@ -170,10 +191,11 @@ export function MarketsClient() {
               <TableRow className="hover:bg-transparent">
                 <TableHead className="bg-[#090d14]">Market</TableHead>
                 <TableHead className="bg-[#090d14]">Venue</TableHead>
-                <TableHead className="bg-[#090d14]">Probability</TableHead>
-                <TableHead className="bg-[#090d14]">Volume 24h</TableHead>
+                <TableHead className="bg-[#090d14]">YES %</TableHead>
+                <TableHead className="bg-[#090d14]">Volume</TableHead>
                 <TableHead className="bg-[#090d14]">Liquidity</TableHead>
                 <TableHead className="bg-[#090d14]">Status</TableHead>
+                <TableHead className="bg-[#090d14]">Quality</TableHead>
                 <TableHead className="bg-[#090d14]">Updated</TableHead>
               </TableRow>
             </TableHeader>
@@ -198,7 +220,7 @@ export function MarketsClient() {
           ) : (
             <AlertCircle className="h-3.5 w-3.5" />
           )}
-          {formatCompactNumber(total)} markets indexed
+          {formatCompactNumber(total)} tracked markets
         </div>
         <div className="flex items-center gap-2">
           <Button

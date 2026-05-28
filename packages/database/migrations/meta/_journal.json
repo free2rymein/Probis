@@ -29,6 +29,27 @@
       "when": 1790620800000,
       "tag": "0004_live_polymarket_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790707200000,
+      "tag": "0005_market_quality_universe",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790793600000,
+      "tag": "0006_intelligence_weighted_universe",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790880000000,
+      "tag": "0007_yes_no_probability_mapping",
+      "breakpoints": true
     }
   ]
 }

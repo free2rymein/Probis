@@ -45,8 +45,18 @@ export type MarketListItem = {
   category: string;
   status: MarketStatus;
   probability: number | null;
+  yesProbability: number | null;
   volume24h: number;
   liquidity: number | null;
+  isActiveUniverse: boolean;
+  qualityScore: number | null;
+  universeTier: string | null;
+  intelligenceWeightedScore: number | null;
+  repricingVelocityScore: number | null;
+  narrativeRelevanceScore: number | null;
+  walletActivityScore: number | null;
+  exclusionReason: string | null;
+  universeRank: number | null;
   latestAggregateBucket: string | null;
   updatedAt: string;
 };
@@ -68,6 +78,26 @@ export type DashboardMetrics = {
   recentTradeThroughput1m: number;
   recentTradeThroughput5m: number;
   volume24h: number;
+  activeUniverseCount: number;
+  activeUniverseAvgLiquidity: number;
+  activeUniverseAvgVolume24h: number;
+  topMarketByQualityScore: string | null;
+  topCategories: Array<{
+    category: string;
+    count: number;
+  }>;
+  tierDistribution: Array<{
+    tier: string;
+    count: number;
+  }>;
+  topRepricingMarkets: Array<{
+    title: string;
+    score: number;
+  }>;
+  topNarrativeMarkets: Array<{
+    title: string;
+    score: number;
+  }>;
   aggregateMarketsUpdated5m: number;
   latestAggregateBucket: string | null;
   latestMarketUpdate: string | null;

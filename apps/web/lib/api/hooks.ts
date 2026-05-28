@@ -19,6 +19,7 @@ export type MarketsQuery = {
   status?: string;
   source?: string;
   category?: string;
+  activeUniverse?: boolean;
   sort?: string;
   direction?: "asc" | "desc";
 };

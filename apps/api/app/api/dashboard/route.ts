@@ -10,6 +10,14 @@ type DashboardRow = {
   recent_trade_throughput_1m: string | null;
   recent_trade_throughput_5m: string | null;
   volume_24h: string | null;
+  active_universe_count: string;
+  active_universe_avg_liquidity: string | null;
+  active_universe_avg_volume_24h: string | null;
+  top_market_by_quality_score: string | null;
+  top_categories: Array<{ category: string; count: number }> | null;
+  tier_distribution: Array<{ tier: string; count: number }> | null;
+  top_repricing_markets: Array<{ title: string; score: number }> | null;
+  top_narrative_markets: Array<{ title: string; score: number }> | null;
   aggregate_markets_updated_5m: string;
   latest_aggregate_bucket: Date | null;
   latest_market_update: Date | null;
@@ -30,6 +38,20 @@ const healthFromBucket = (bucket: Date | null): DashboardMetrics["ingestionHealt
   return ageMs <= 5 * 60_000 ? "healthy" : "stale";
 };
 
+const parseTopCategories = (
+  value: DashboardRow["top_categories"]
+): DashboardMetrics["topCategories"] => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+
+  return [];
+};
+
+const parseArray = <T>(value: T[] | null): T[] => {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [];
+};
+
 export const GET = withApiHandler(async (_request, { requestId }) => {
   const sql = getSql();
   const [row] = await sql<DashboardRow[]>`
@@ -43,6 +65,80 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
     market_freshness AS (
       SELECT MAX(updated_at) AS latest_market_update
       FROM markets
+    ),
+    active_universe_stats AS (
+      SELECT
+        COUNT(*) FILTER (WHERE m.is_active_universe)::text AS active_universe_count,
+        AVG(m.liquidity) FILTER (WHERE m.is_active_universe)::text AS active_universe_avg_liquidity,
+        AVG(COALESCE(m.volume_24h, volume_24h.value)) FILTER (WHERE m.is_active_universe)::text AS active_universe_avg_volume_24h,
+        (
+          SELECT title
+          FROM markets
+          WHERE is_active_universe
+          ORDER BY intelligence_weighted_score DESC NULLS LAST, universe_rank ASC NULLS LAST
+          LIMIT 1
+        ) AS top_market_by_quality_score,
+        (
+          SELECT json_agg(
+            json_build_object('category', ranked.category, 'count', ranked.market_count)
+            ORDER BY ranked.market_count DESC, ranked.category ASC
+          )
+          FROM (
+            SELECT category, COUNT(*)::integer AS market_count
+            FROM markets
+            WHERE is_active_universe
+            GROUP BY category
+            ORDER BY market_count DESC, category ASC
+            LIMIT 5
+          ) ranked
+        ) AS top_categories,
+        (
+          SELECT json_agg(
+            json_build_object('tier', ranked.universe_tier, 'count', ranked.market_count)
+            ORDER BY ranked.market_count DESC, ranked.universe_tier ASC
+          )
+          FROM (
+            SELECT COALESCE(universe_tier, 'unassigned') AS universe_tier, COUNT(*)::integer AS market_count
+            FROM markets
+            WHERE is_active_universe
+            GROUP BY COALESCE(universe_tier, 'unassigned')
+          ) ranked
+        ) AS tier_distribution,
+        (
+          SELECT json_agg(
+            json_build_object('title', ranked.title, 'score', ranked.score)
+            ORDER BY ranked.score DESC
+          )
+          FROM (
+            SELECT title, repricing_velocity_score::float AS score
+            FROM markets
+            WHERE is_active_universe
+              AND repricing_velocity_score IS NOT NULL
+            ORDER BY repricing_velocity_score DESC
+            LIMIT 5
+          ) ranked
+        ) AS top_repricing_markets,
+        (
+          SELECT json_agg(
+            json_build_object('title', ranked.title, 'score', ranked.score)
+            ORDER BY ranked.score DESC
+          )
+          FROM (
+            SELECT title, narrative_relevance_score::float AS score
+            FROM markets
+            WHERE is_active_universe
+              AND narrative_relevance_score IS NOT NULL
+            ORDER BY narrative_relevance_score DESC
+            LIMIT 5
+          ) ranked
+        ) AS top_narrative_markets
+      FROM markets m
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(SUM(a.volume), 0) AS value
+        FROM market_aggregates_1m a
+        WHERE a.market_id = m.id
+          AND a.bucket >= now() - interval '24 hours'
+      ) volume_24h ON true
     ),
     aggregate_stats AS (
       SELECT
@@ -103,7 +199,7 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
       FROM wallet_profiles
     )
     SELECT *
-    FROM market_counts, market_freshness, aggregate_stats, timeline_stats, anomaly_stats, wallet_stats
+    FROM market_counts, market_freshness, active_universe_stats, aggregate_stats, timeline_stats, anomaly_stats, wallet_stats
   `;
 
   const latestBucket = row?.latest_aggregate_bucket ?? null;
@@ -114,6 +210,14 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
     recentTradeThroughput1m: Number(row?.recent_trade_throughput_1m ?? 0),
     recentTradeThroughput5m: Number(row?.recent_trade_throughput_5m ?? 0),
     volume24h: Number(row?.volume_24h ?? 0),
+    activeUniverseCount: Number(row?.active_universe_count ?? 0),
+    activeUniverseAvgLiquidity: Number(row?.active_universe_avg_liquidity ?? 0),
+    activeUniverseAvgVolume24h: Number(row?.active_universe_avg_volume_24h ?? 0),
+    topMarketByQualityScore: row?.top_market_by_quality_score ?? null,
+    topCategories: parseTopCategories(row?.top_categories ?? null),
+    tierDistribution: parseArray(row?.tier_distribution ?? null),
+    topRepricingMarkets: parseArray(row?.top_repricing_markets ?? null),
+    topNarrativeMarkets: parseArray(row?.top_narrative_markets ?? null),
     aggregateMarketsUpdated5m: Number(row?.aggregate_markets_updated_5m ?? 0),
     latestAggregateBucket: latestBucket?.toISOString() ?? null,
     latestMarketUpdate: row?.latest_market_update?.toISOString() ?? null,

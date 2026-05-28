@@ -111,9 +111,9 @@ export class TradeIngestionWorker {
       return;
     }
 
-    const marketRefs = await this.repositories.markets.listActiveMarketRefs(
+    const marketRefs = await this.repositories.markets.listActiveUniverseMarketRefs(
       "polymarket",
-      Math.min(this.config.MAX_MARKETS_PER_POLL, this.config.MAX_MARKETS_PER_TRADE_POLL)
+      this.config.ACTIVE_MARKET_UNIVERSE_LIMIT
     );
 
     if (marketRefs.length === 0) {
@@ -126,7 +126,8 @@ export class TradeIngestionWorker {
       limit: this.config.TRADE_POLL_LIMIT,
       source: this.config.POLYMARKET_TRADE_SOURCE,
       minTradeUsdToStore: this.config.MIN_TRADE_USD_TO_STORE,
-      maxTradesPerPollCycle: this.config.MAX_TRADES_PER_POLL_CYCLE
+      maxTradesPerPollCycle: this.config.MAX_TRADES_PER_POLL_CYCLE,
+      activeMarketUniverseLimit: this.config.ACTIVE_MARKET_UNIVERSE_LIMIT
     });
     this.pollAcceptedTrades = 0;
     this.pollSkippedSmallTrades = 0;

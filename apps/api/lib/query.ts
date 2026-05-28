@@ -10,7 +10,13 @@ export const marketListQuerySchema = paginationQuerySchema.extend({
   status: z.enum(["draft", "open", "paused", "closed", "settled", "cancelled"]).optional(),
   source: z.enum(["polymarket", "kalshi", "manifold", "internal"]).optional(),
   category: z.string().trim().min(1).max(100).optional(),
-  sort: z.enum(["updated_at", "title", "status", "volume", "probability"]).default("updated_at"),
+  activeUniverse: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => (value === undefined ? undefined : value === "true")),
+  sort: z
+    .enum(["updated_at", "title", "status", "volume", "probability", "quality"])
+    .default("updated_at"),
   direction: z.enum(["asc", "desc"]).default("desc")
 });
 

@@ -1,9 +1,11 @@
 import type { NormalizedMarket, NormalizedTrade } from "../types/events";
 import type { PolymarketMarket, PolymarketTrade } from "../types/polymarket";
 import { createHash } from "node:crypto";
+import { logger } from "../utils/logger";
 import { serializeForHash } from "../utils/serialization";
 
 const normalizeStatus = (market: PolymarketMarket): NormalizedMarket["status"] => {
+  if (market.resolved) return "settled";
   if (market.closed) return "closed";
   if (market.active === false) return "paused";
   return "open";
@@ -24,7 +26,16 @@ const parseMaybeJsonArray = (value: unknown): unknown[] => {
 const numberString = (value: unknown): string | null => {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed.toString() : null;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed.toString() : null;
+};
+
+const firstNumberString = (...values: unknown[]) => {
+  for (const value of values) {
+    const parsed = numberString(value);
+    if (parsed !== null) return parsed;
+  }
+
+  return null;
 };
 
 const extractClobTokenIds = (market: PolymarketMarket): string[] => {
@@ -36,27 +47,140 @@ const extractClobTokenIds = (market: PolymarketMarket): string[] => {
   return [...new Set([...fromField, ...fromTokens])];
 };
 
+const outcomeLabel = (value: unknown) => {
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || value === null) return null;
+
+  const record = value as Record<string, unknown>;
+  const label = record.name ?? record.label ?? record.outcome ?? record.title;
+  return typeof label === "string" ? label : null;
+};
+
 const extractOutcomes = (market: PolymarketMarket): string[] =>
-  parseMaybeJsonArray(market.outcomes).map(String).filter(Boolean);
+  parseMaybeJsonArray(market.outcomes)
+    .map(outcomeLabel)
+    .filter((outcome): outcome is string => Boolean(outcome));
 
 const extractOutcomePrices = (market: PolymarketMarket): number[] =>
   parseMaybeJsonArray(market.outcomePrices)
     .map(Number)
     .filter((price) => Number.isFinite(price));
 
-const extractCurrentProbability = (market: PolymarketMarket): string | null => {
-  const direct =
-    numberString(market.lastTradePrice) ??
-    numberString(market.bestAsk) ??
-    numberString(market.bestBid);
-  if (direct) return direct;
+const normalizeTags = (tags: PolymarketMarket["tags"]): string[] =>
+  (tags ?? [])
+    .map((tag) => {
+      if (typeof tag === "string") return tag;
+      return tag.label ?? tag.name ?? tag.slug ?? null;
+    })
+    .filter((tag): tag is string => Boolean(tag));
 
+const CATEGORY_KEYWORDS = {
+  crypto: ["crypto", "bitcoin", "btc", "ethereum", "eth", "solana", "sol", "xrp", "token"],
+  geopolitics: [
+    "iran",
+    "israel",
+    "gaza",
+    "ukraine",
+    "russia",
+    "china",
+    "taiwan",
+    "sanction",
+    "war"
+  ],
+  elections: ["election", "president", "senate", "congress", "trump", "biden", "polling"],
+  politics: ["politics", "government", "supreme court", "approval"],
+  finance_macro: ["fed", "inflation", "cpi", "recession", "economy", "gdp", "tariff"],
+  rates: ["rates", "rate cut", "fomc", "treasury", "yield"],
+  commodities: ["oil", "gold", "natural gas", "wti", "brent", "copper"],
+  technology_ai: ["ai", "openai", "nvidia", "apple", "tesla", "spacex", "google", "microsoft"],
+  regulation: ["regulation", "sec", "lawsuit", "ban", "approval", "etf"],
+  weather: ["weather", "hurricane", "temperature", "rain", "snow", "storm"],
+  sports: ["sports", "nba", "nfl", "mlb", "nhl", "soccer", "tennis", "ufc", "golf"],
+  esports: ["esports", "e-sports", "lol", "league of legends", "valorant", "cs2", "dota"],
+  entertainment: ["movie", "oscars", "grammy", "music", "celebrity", "tv", "box office"]
+} as const;
+
+const normalizeCategory = (market: PolymarketMarket, title: string, tags: string[]) => {
+  const rawCategory = market.category?.trim().toLowerCase();
+  const text = [rawCategory, title, market.description, market.slug, ...tags]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+    if (keywords.some((keyword) => text.includes(keyword))) return category;
+  }
+
+  return rawCategory && rawCategory !== "uncategorized" ? rawCategory : "other";
+};
+
+const extractResolutionDate = (market: PolymarketMarket) => {
+  const raw =
+    market.endDate ??
+    market.endDateIso ??
+    market.resolutionDate ??
+    market.closeTime ??
+    market.closedTime ??
+    null;
+  if (!raw) return null;
+
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const normalizeProbabilityValue = (value: unknown) => {
+  const parsed = numberString(value);
+  if (parsed === null) return null;
+
+  const probability = Number(parsed);
+  return probability >= 0 && probability <= 1 ? parsed : null;
+};
+
+const tokenOutcomeLabel = (token: NonNullable<PolymarketMarket["tokens"]>[number]) =>
+  token.outcome ?? token.name ?? token.label;
+
+const extractYesNoProbabilities = (
+  market: PolymarketMarket,
+  title: string
+): {
+  yes: string | null;
+  no: string | null;
+  outcomes: string[];
+  outcomePrices: number[];
+} => {
   const prices = extractOutcomePrices(market);
-  if (prices.length === 0) return null;
-
   const outcomes = extractOutcomes(market);
-  const yesIndex = outcomes.findIndex((outcome) => outcome.toLowerCase() === "yes");
-  return (prices[yesIndex >= 0 ? yesIndex : 0] ?? null)?.toString() ?? null;
+  const yesIndex = outcomes.findIndex((outcome) => outcome.trim().toLowerCase() === "yes");
+  const noIndex = outcomes.findIndex((outcome) => outcome.trim().toLowerCase() === "no");
+
+  let yes = yesIndex >= 0 ? normalizeProbabilityValue(prices[yesIndex]) : null;
+  let no = noIndex >= 0 ? normalizeProbabilityValue(prices[noIndex]) : null;
+
+  if (yes === null || no === null) {
+    for (const token of market.tokens ?? []) {
+      const label = tokenOutcomeLabel(token)?.trim().toLowerCase();
+      if (label === "yes" && yes === null) yes = normalizeProbabilityValue(token.price);
+      if (label === "no" && no === null) no = normalizeProbabilityValue(token.price);
+    }
+  }
+
+  if (yes === null) {
+    logger.warn("market_probability_mapping.failed", {
+      title,
+      rawOutcomes: JSON.stringify(market.outcomes ?? null),
+      rawOutcomePrices: JSON.stringify(market.outcomePrices ?? null),
+      mappedYesProbability: null
+    });
+  } else {
+    logger.info("market_probability_mapping.success", {
+      title,
+      rawOutcomes: JSON.stringify(market.outcomes ?? null),
+      rawOutcomePrices: JSON.stringify(market.outcomePrices ?? null),
+      mappedYesProbability: Number(yes)
+    });
+  }
+
+  return { yes, no, outcomes, outcomePrices: prices };
 };
 
 export const normalizePolymarketMarket = (market: PolymarketMarket): NormalizedMarket | null => {
@@ -65,28 +189,52 @@ export const normalizePolymarketMarket = (market: PolymarketMarket): NormalizedM
 
   if (!externalId || !title) return null;
 
+  const tags = normalizeTags(market.tags);
+  const probabilityMapping = extractYesNoProbabilities(market, title);
+  const volume24h = firstNumberString(
+    market.volume24hrClob,
+    market.volume24hr,
+    market.volume24h,
+    market.volume24H
+  );
+  const totalVolume = firstNumberString(market.volumeNum, market.volume);
+  const liquidity = firstNumberString(market.liquidityNum, market.liquidityClob, market.liquidity);
+  const endDate = extractResolutionDate(market);
+
   return {
     source: "polymarket",
     externalId,
     slug: market.slug ?? externalId,
     title,
     description: market.description ?? null,
-    category: market.category ?? "uncategorized",
+    category: normalizeCategory(market, title, tags),
     status: normalizeStatus(market),
     conditionId: market.conditionId ?? null,
     clobTokenIds: extractClobTokenIds(market),
-    currentProbability: extractCurrentProbability(market),
-    volume24h: numberString(market.volume24hrClob) ?? numberString(market.volume24hr),
-    liquidity: numberString(market.liquidityNum) ?? numberString(market.liquidity),
+    currentProbability: probabilityMapping.yes,
+    currentProbabilityYes: probabilityMapping.yes,
+    currentProbabilityNo: probabilityMapping.no,
+    volume24h,
+    liquidity,
     metadata: {
       polymarket_id: market.id ?? null,
-      outcomes: extractOutcomes(market),
-      outcome_prices: extractOutcomePrices(market),
-      tags: market.tags ?? [],
-      gamma_volume: numberString(market.volume),
-      updated_at: market.updatedAt ?? null
+      outcomes: probabilityMapping.outcomes,
+      outcome_prices: probabilityMapping.outcomePrices,
+      current_probability_yes: probabilityMapping.yes,
+      current_probability_no: probabilityMapping.no,
+      tags,
+      raw_category: market.category ?? null,
+      gamma_volume: totalVolume,
+      gamma_volume_24h: volume24h,
+      gamma_liquidity: liquidity,
+      updated_at: market.updatedAt ?? null,
+      end_date: endDate?.toISOString() ?? null,
+      active: market.active ?? null,
+      closed: market.closed ?? null,
+      resolved: market.resolved ?? null,
+      archived: market.archived ?? null
     },
-    resolutionDate: market.endDate ? new Date(market.endDate) : null
+    resolutionDate: endDate
   };
 };
 

@@ -14,7 +14,7 @@ export class ApiClientError extends Error {
 
 export async function apiGet<TData>(
   path: string,
-  params: Record<string, string | number | null | undefined> = {},
+  params: Record<string, string | number | boolean | null | undefined> = {},
   signal?: AbortSignal
 ): Promise<TData> {
   const url = new URL(path, API_BASE_URL);
