@@ -259,6 +259,17 @@ export type WalletIntelligenceMetrics = {
   avgExitPrice: number | null;
   proxyRealizedPnlUsd: number | null;
   proxyWinRate: number | null;
+  proxyPnlUsd: number | null;
+  proxyPnlSampleCount: number | null;
+  proxyPnlResolvedCount: number | null;
+  proxyPerformanceConfidence: "low" | "medium" | "high" | null;
+  entryTimingScore: number | null;
+  entryTimingLabel: "early" | "neutral" | "late" | "poor timing" | "insufficient data" | null;
+  entryTimingConfidence: "low" | "medium" | "high" | null;
+  timingSampleCount: number | null;
+  reliabilityScore: number | null;
+  reliabilityConfidence: "low" | "medium" | "high" | null;
+  repeatedDirectionalMarketCount: number | null;
   specializationTags: Array<"crypto" | "geopolitics" | "macro" | "politics" | "tech_ai">;
   coordinatedFlowParticipation: boolean;
 };

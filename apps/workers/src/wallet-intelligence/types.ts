@@ -23,6 +23,13 @@ export type WalletProfileInput = {
   resolvedMarketCount: number;
   specializationTags: string[];
   coordinatedFlowParticipation: boolean;
+  proxyPnlUsd: number;
+  proxyPnlSampleCount: number;
+  proxyPnlResolvedCount: number;
+  timingSampleCount: number;
+  favorableTimingCount: number;
+  poorTimingCount: number;
+  repeatedDirectionalMarketCount: number;
 };
 
 export type WalletScores = {

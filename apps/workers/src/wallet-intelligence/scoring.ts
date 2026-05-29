@@ -20,10 +20,31 @@ const proxyWinRate = (profile: WalletProfileInput) =>
     ? profile.profitableMarketProxyCount / profile.resolvedMarketCount
     : null;
 
-const proxyPnl = (profile: WalletProfileInput) =>
-  profile.sellVolumeUsd > 0 || profile.buyVolumeUsd > 0
-    ? profile.sellVolumeUsd - profile.buyVolumeUsd
-    : null;
+const proxyWinRateFromSamples = (profile: WalletProfileInput) =>
+  profile.proxyPnlSampleCount > 0
+    ? (profile.proxyPnlSampleCount - profile.poorTimingCount) / profile.proxyPnlSampleCount
+    : proxyWinRate(profile);
+
+const timingQualityScore = (profile: WalletProfileInput) => {
+  if (profile.timingSampleCount === 0) return 0;
+  const favorableShare = profile.favorableTimingCount / profile.timingSampleCount;
+  const poorShare = profile.poorTimingCount / profile.timingSampleCount;
+  return clampScore(50 + favorableShare * 50 - poorShare * 45);
+};
+
+const timingQualityLabel = (score: number, samples: number) => {
+  if (samples === 0) return "insufficient data";
+  if (score >= 70) return "early";
+  if (score >= 50) return "neutral";
+  if (score >= 35) return "late";
+  return "poor timing";
+};
+
+const metricConfidence = (sampleCount: number, depthScore: number) => {
+  if (sampleCount >= 20 && depthScore >= 70) return "high";
+  if (sampleCount >= 5 || depthScore >= 40) return "medium";
+  return "low";
+};
 
 const confidenceLabel = (profile: WalletProfileInput) => {
   if (
@@ -131,8 +152,10 @@ export const scoreWalletProfile = (
 ): WalletScores => {
   const direction = directionalBias(profile);
   const recentScore = recentActivityScore(profile);
-  const winRate = proxyWinRate(profile);
-  const pnl = proxyPnl(profile);
+  const winRate = proxyWinRateFromSamples(profile);
+  const pnl = profile.proxyPnlSampleCount > 0 ? profile.proxyPnlUsd : null;
+  const timingScore = timingQualityScore(profile);
+  const timingLabel = timingQualityLabel(timingScore, profile.timingSampleCount);
   const archetype = classifyArchetype(profile, minSmartMoneyVolumeUsd);
   const confidence = confidenceLabel(profile);
   const volumeScore = safeRatio(profile.totalVolumeUsd, minSmartMoneyVolumeUsd * 5) * 28;
@@ -164,8 +187,8 @@ export const scoreWalletProfile = (
     safeRatio(profile.averageTradeUsd, 1_500) * 35 +
       safeRatio(profile.marketConcentration, 0.65) * 30 +
       safeRatio(Math.abs(direction), 0.65) * 20 +
-      safeRatio(profile.largeTradeCount, 5) * 10 +
-      safeRatio(profile.totalTradeCount, 20) * 5
+      safeRatio(profile.repeatedDirectionalMarketCount, 4) * 10 +
+      safeRatio(profile.largeTradeCount, 5) * 5
   );
 
   const influenceScore = clampScore(
@@ -174,6 +197,27 @@ export const scoreWalletProfile = (
       safeRatio(profile.highSignalMarketCount, 5) * 20 +
       safeRatio(profile.totalVolumeUsd, minSmartMoneyVolumeUsd * 4) * 15
   );
+
+  // Reliability is intentionally compact and explainable: enough activity depth,
+  // favorable proxy timing, measured conviction, smart-flow participation, and
+  // enough proxy performance samples to trust the read.
+  const activityDepthScore = clampScore(
+    safeRatio(profile.totalTradeCount, 25) * 45 +
+      safeRatio(profile.activeMarketCount, 6) * 25 +
+      safeRatio(profile.totalVolumeUsd, minSmartMoneyVolumeUsd * 5) * 30
+  );
+  const performanceConfidenceScore = clampScore(
+    safeRatio(profile.proxyPnlSampleCount, 20) * 60 +
+      safeRatio(profile.proxyPnlResolvedCount, 5) * 40
+  );
+  const reliabilityScore = clampScore(
+    activityDepthScore * 0.25 +
+      timingScore * 0.25 +
+      convictionScore * 0.2 +
+      performanceConfidenceScore * 0.2 +
+      (profile.coordinatedFlowParticipation ? 10 : 0)
+  );
+  const reliabilityConfidence = metricConfidence(profile.proxyPnlSampleCount, activityDepthScore);
 
   return {
     smartMoneyScore,
@@ -205,8 +249,27 @@ export const scoreWalletProfile = (
       avg_exit_price: profile.avgExitPrice,
       proxy_realized_pnl_usd: pnl,
       proxy_win_rate: winRate,
+      proxy_pnl_usd: pnl,
+      proxy_pnl_sample_count: profile.proxyPnlSampleCount,
+      proxy_pnl_resolved_count: profile.proxyPnlResolvedCount,
+      proxy_performance_confidence: metricConfidence(
+        profile.proxyPnlSampleCount,
+        performanceConfidenceScore
+      ),
+      entry_timing_score: timingScore,
+      entry_timing_label: timingLabel,
+      entry_timing_confidence: metricConfidence(profile.timingSampleCount, timingScore),
+      timing_sample_count: profile.timingSampleCount,
+      favorable_timing_count: profile.favorableTimingCount,
+      poor_timing_count: profile.poorTimingCount,
+      reliability_score: reliabilityScore,
+      reliability_confidence: reliabilityConfidence,
+      performance_engine_version: 1,
+      performance_engine_explanation:
+        "Proxy metrics compare trade prices with later/literature-available market probabilities and current marks. These are estimates, not realized alpha.",
       profitable_market_proxy_count: profile.profitableMarketProxyCount,
       resolved_market_count: profile.resolvedMarketCount,
+      repeated_directional_market_count: profile.repeatedDirectionalMarketCount,
       specialization_tags: profile.specializationTags,
       coordinated_flow_participation: profile.coordinatedFlowParticipation,
       smart_money_min_volume_usd: minSmartMoneyVolumeUsd

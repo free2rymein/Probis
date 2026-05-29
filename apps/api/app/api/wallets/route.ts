@@ -78,11 +78,12 @@ export const GET = withApiHandler(async (request, { requestId }) => {
       SELECT
         *,
         (
-          smart_money_score * 0.30 +
-          conviction_score * 0.30 +
-          influence_score * 0.15 +
-          COALESCE((metadata->>'recent_activity_score')::numeric, 0) * 0.15 +
-          COALESCE((metadata->>'concentration_score')::numeric, 0) * 0.10
+          COALESCE((metadata->>'reliability_score')::numeric, smart_money_score) * 0.30 +
+          conviction_score * 0.22 +
+          COALESCE((metadata->>'entry_timing_score')::numeric, 0) * 0.18 +
+          COALESCE((metadata->>'recent_activity_score')::numeric, 0) * 0.12 +
+          COALESCE((metadata->>'concentration_score')::numeric, 0) * 0.10 +
+          LEAST(anomaly_trigger_count * 8, 40) * 0.08
         ) * activity_multiplier AS effective_smart_money_score,
         (influence_score * 0.70 + COALESCE((metadata->>'recent_activity_score')::numeric, 0) * 0.30)
           * activity_multiplier AS effective_influence_score,

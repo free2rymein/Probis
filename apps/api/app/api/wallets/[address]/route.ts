@@ -78,6 +78,18 @@ const fallbackConfidence = (profile: ProfileMetricSource) => {
   return "low confidence";
 };
 
+const confidenceValue = (value: string | null) =>
+  value === "low" || value === "medium" || value === "high" ? value : null;
+
+const timingLabelValue = (value: string | null) =>
+  value === "early" ||
+  value === "neutral" ||
+  value === "late" ||
+  value === "poor timing" ||
+  value === "insufficient data"
+    ? value
+    : null;
+
 const walletMetrics = (profile: ProfileMetricSource): WalletIntelligenceMetrics => {
   const metadata = profile.metadata;
   const archetype = metadataString(metadata, "archetype");
@@ -114,6 +126,21 @@ const walletMetrics = (profile: ProfileMetricSource): WalletIntelligenceMetrics 
     avgExitPrice: metadataNumber(metadata, "avg_exit_price"),
     proxyRealizedPnlUsd: metadataNumber(metadata, "proxy_realized_pnl_usd"),
     proxyWinRate: metadataNumber(metadata, "proxy_win_rate"),
+    proxyPnlUsd:
+      metadataNumber(metadata, "proxy_pnl_usd") ??
+      metadataNumber(metadata, "proxy_realized_pnl_usd"),
+    proxyPnlSampleCount: metadataNumber(metadata, "proxy_pnl_sample_count"),
+    proxyPnlResolvedCount: metadataNumber(metadata, "proxy_pnl_resolved_count"),
+    proxyPerformanceConfidence: confidenceValue(
+      metadataString(metadata, "proxy_performance_confidence")
+    ),
+    entryTimingScore: metadataNumber(metadata, "entry_timing_score"),
+    entryTimingLabel: timingLabelValue(metadataString(metadata, "entry_timing_label")),
+    entryTimingConfidence: confidenceValue(metadataString(metadata, "entry_timing_confidence")),
+    timingSampleCount: metadataNumber(metadata, "timing_sample_count"),
+    reliabilityScore: metadataNumber(metadata, "reliability_score"),
+    reliabilityConfidence: confidenceValue(metadataString(metadata, "reliability_confidence")),
+    repeatedDirectionalMarketCount: metadataNumber(metadata, "repeated_directional_market_count"),
     specializationTags: specializationTags(metadata),
     coordinatedFlowParticipation: metadata.coordinated_flow_participation === true
   };

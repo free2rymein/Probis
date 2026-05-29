@@ -200,6 +200,9 @@ export function WalletDetailClient({ address }: { address: string }) {
   const topImpactedMarket = [...impactedMarkets.values()].sort(
     (a, b) => b.maxSeverity - a.maxSeverity || b.count - a.count
   )[0];
+  const proxyPnl = metrics.proxyPnlUsd ?? metrics.proxyRealizedPnlUsd;
+  const reliability = metrics.reliabilityScore;
+  const timingLabel = metrics.entryTimingLabel ?? "insufficient data";
 
   return (
     <div className="space-y-4">
@@ -283,10 +286,10 @@ export function WalletDetailClient({ address }: { address: string }) {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
-          ["Smart money", profile.smartMoneyScore.toFixed(0)],
+          ["Reliability", reliability === null ? "n/a" : reliability.toFixed(0)],
           ["Conviction", profile.convictionScore.toFixed(0)],
-          ["Influence", profile.influenceScore.toFixed(0)],
-          ["Volume", formatUsd(profile.totalVolumeUsd)]
+          ["Timing", timingLabel],
+          ["Proxy PnL", proxyPnl === null ? "n/a" : formatUsd(proxyPnl)]
         ].map(([label, value]) => (
           <Card key={label}>
             <CardContent>
@@ -296,6 +299,77 @@ export function WalletDetailClient({ address }: { address: string }) {
           </Card>
         ))}
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Performance Engine</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="border-border rounded-md border p-3">
+              <div className="text-muted-foreground text-xs">Proxy PnL</div>
+              <div
+                className={`mt-1 font-mono text-xl ${
+                  (proxyPnl ?? 0) >= 0 ? "text-emerald-300" : "text-red-300"
+                }`}
+              >
+                {proxyPnl === null ? "n/a" : formatUsd(proxyPnl)}
+              </div>
+              <div className="text-muted-foreground mt-1 text-xs">
+                {metrics.proxyPerformanceConfidence ?? "low"} confidence ·{" "}
+                {formatCompactNumber(metrics.proxyPnlSampleCount ?? 0)} samples
+              </div>
+            </div>
+            <div className="border-border rounded-md border p-3">
+              <div className="text-muted-foreground text-xs">Proxy Win Rate</div>
+              <div className="mt-1 font-mono text-xl">{formatPercent(metrics.proxyWinRate)}</div>
+              <div className="text-muted-foreground mt-1 text-xs">
+                Estimated from available marks, not final settlement.
+              </div>
+            </div>
+            <div className="border-border rounded-md border p-3">
+              <div className="text-muted-foreground text-xs">Entry Timing</div>
+              <div className="mt-1 text-xl font-semibold capitalize">{timingLabel}</div>
+              <div className="text-muted-foreground mt-1 text-xs">
+                score {metrics.entryTimingScore?.toFixed(0) ?? "n/a"} ·{" "}
+                {metrics.entryTimingConfidence ?? "low"} confidence
+              </div>
+            </div>
+            <div className="border-border rounded-md border p-3">
+              <div className="text-muted-foreground text-xs">Reliability</div>
+              <div className="mt-1 font-mono text-xl">{reliability?.toFixed(0) ?? "n/a"}</div>
+              <div className="text-muted-foreground mt-1 text-xs">
+                {metrics.reliabilityConfidence ?? "low"} confidence
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-3 lg:grid-cols-3">
+            <div className="border-border rounded-md border p-3 text-sm">
+              <div className="font-medium">Proxy PnL explanation</div>
+              <p className="text-muted-foreground mt-1">
+                Estimated from available market probability data. Resolved markets use available
+                outcome/probability proxies where present; unresolved markets are marked against the
+                latest YES probability. This is proxy PnL, not realized performance.
+              </p>
+            </div>
+            <div className="border-border rounded-md border p-3 text-sm">
+              <div className="font-medium">Timing quality</div>
+              <p className="text-muted-foreground mt-1">
+                Compares wallet entry prices with later market probabilities in bounded 1h, 6h, and
+                24h windows. Early means favorable movement followed entry; this is correlation, not
+                certainty.
+              </p>
+            </div>
+            <div className="border-border rounded-md border p-3 text-sm">
+              <div className="font-medium">Reliability breakdown</div>
+              <p className="text-muted-foreground mt-1">
+                Combines activity depth, timing quality, conviction, proxy performance confidence,
+                and smart-flow participation. Sparse wallets remain low confidence.
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <Card>

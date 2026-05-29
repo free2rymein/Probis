@@ -135,6 +135,57 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
           AND t.wallet_address != '0x0000000000000000000000000000000000000000'
           AND t.wallet_address != '0x0000000000000000000000000000000000000001'
       ),
+      trade_marks AS (
+        SELECT
+          rt.*,
+          COALESCE(mark_1h.price, mark_6h.price, mark_24h.price, rt.current_probability_yes) AS later_yes_probability,
+          CASE
+            WHEN rt.outcome = 'yes' THEN COALESCE(mark_1h.price, mark_6h.price, mark_24h.price, rt.current_probability_yes) - rt.price
+            WHEN rt.outcome = 'no' THEN rt.price - COALESCE(mark_1h.price, mark_6h.price, mark_24h.price, rt.current_probability_yes)
+            WHEN rt.side = 'sell' THEN rt.price - COALESCE(mark_1h.price, mark_6h.price, mark_24h.price, rt.current_probability_yes)
+            ELSE NULL
+          END AS timing_edge,
+          CASE
+            WHEN rt.side = 'buy' AND rt.outcome = 'yes' THEN
+              (COALESCE(rt.current_probability_yes, rt.price) - rt.price) * NULLIF(rt.usd_value / NULLIF(rt.price, 0), 0)
+            WHEN rt.side = 'buy' AND rt.outcome = 'no' THEN
+              ((1 - COALESCE(rt.current_probability_yes, rt.price)) - rt.price) * NULLIF(rt.usd_value / NULLIF(rt.price, 0), 0)
+            WHEN rt.side = 'sell' THEN
+              (rt.price - COALESCE(rt.current_probability_yes, rt.price)) * NULLIF(rt.usd_value / NULLIF(rt.price, 0), 0)
+            ELSE 0
+          END AS proxy_pnl_usd
+        FROM recent_trades rt
+        LEFT JOIN LATERAL (
+          SELECT t2.price::numeric AS price
+          FROM trades t2
+          WHERE t2.market_id = rt.market_id
+            AND lower(COALESCE(t2.outcome, '')) = 'yes'
+            AND t2.trade_timestamp > rt.trade_timestamp
+            AND t2.trade_timestamp <= rt.trade_timestamp + interval '1 hour'
+          ORDER BY t2.trade_timestamp DESC
+          LIMIT 1
+        ) mark_1h ON true
+        LEFT JOIN LATERAL (
+          SELECT t2.price::numeric AS price
+          FROM trades t2
+          WHERE t2.market_id = rt.market_id
+            AND lower(COALESCE(t2.outcome, '')) = 'yes'
+            AND t2.trade_timestamp > rt.trade_timestamp
+            AND t2.trade_timestamp <= rt.trade_timestamp + interval '6 hours'
+          ORDER BY t2.trade_timestamp DESC
+          LIMIT 1
+        ) mark_6h ON mark_1h.price IS NULL
+        LEFT JOIN LATERAL (
+          SELECT t2.price::numeric AS price
+          FROM trades t2
+          WHERE t2.market_id = rt.market_id
+            AND lower(COALESCE(t2.outcome, '')) = 'yes'
+            AND t2.trade_timestamp > rt.trade_timestamp
+            AND t2.trade_timestamp <= rt.trade_timestamp + interval '24 hours'
+          ORDER BY t2.trade_timestamp DESC
+          LIMIT 1
+        ) mark_24h ON mark_1h.price IS NULL AND mark_6h.price IS NULL
+      ),
       wallet_market AS (
         SELECT
           wallet_address,
@@ -164,8 +215,32 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
               END
             ELSE 0
           END AS profitable_market_proxy
-        FROM recent_trades
+        FROM trade_marks
         GROUP BY wallet_address, market_id
+      ),
+      wallet_performance AS (
+        SELECT
+          wallet_address,
+          COALESCE(SUM(proxy_pnl_usd), 0) AS proxy_pnl_usd,
+          COUNT(*) FILTER (WHERE later_yes_probability IS NOT NULL)::int AS proxy_pnl_sample_count,
+          COUNT(*) FILTER (WHERE market_status = 'settled' OR resolution_date <= now())::int AS proxy_pnl_resolved_count,
+          COUNT(*) FILTER (WHERE timing_edge IS NOT NULL)::int AS timing_sample_count,
+          COUNT(*) FILTER (WHERE timing_edge >= 0.03)::int AS favorable_timing_count,
+          COUNT(*) FILTER (WHERE timing_edge <= -0.03)::int AS poor_timing_count
+        FROM trade_marks
+        GROUP BY wallet_address
+      ),
+      repeated_directional AS (
+        SELECT
+          wallet_address,
+          COUNT(*)::int AS repeated_directional_market_count
+        FROM (
+          SELECT wallet_address, market_id, side, outcome
+          FROM recent_trades
+          GROUP BY wallet_address, market_id, side, outcome
+          HAVING COUNT(*) >= 2
+        ) repeated
+        GROUP BY wallet_address
       ),
       wallet_market_rollup AS (
         SELECT
@@ -225,15 +300,26 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
         COALESCE(wmr.market_categories, ARRAY[]::text[]) AS market_categories,
         COALESCE(wmr.profitable_market_proxy_count, 0)::int AS profitable_market_proxy_count,
         COALESCE(wmr.resolved_market_count, 0)::int AS resolved_market_count,
-        COALESCE(wa.coordinated_flow_participation, false) AS coordinated_flow_participation
+        COALESCE(wa.coordinated_flow_participation, false) AS coordinated_flow_participation,
+        COALESCE(wp.proxy_pnl_usd, 0)::text AS proxy_pnl_usd,
+        COALESCE(wp.proxy_pnl_sample_count, 0)::int AS proxy_pnl_sample_count,
+        COALESCE(wp.proxy_pnl_resolved_count, 0)::int AS proxy_pnl_resolved_count,
+        COALESCE(wp.timing_sample_count, 0)::int AS timing_sample_count,
+        COALESCE(wp.favorable_timing_count, 0)::int AS favorable_timing_count,
+        COALESCE(wp.poor_timing_count, 0)::int AS poor_timing_count,
+        COALESCE(rd.repeated_directional_market_count, 0)::int AS repeated_directional_market_count
       FROM recent_trades rt
       LEFT JOIN wallet_market_rollup wmr ON wmr.wallet_address = rt.wallet_address
       LEFT JOIN wallet_anomalies wa ON wa.wallet_address = rt.wallet_address
+      LEFT JOIN wallet_performance wp ON wp.wallet_address = rt.wallet_address
+      LEFT JOIN repeated_directional rd ON rd.wallet_address = rt.wallet_address
       GROUP BY rt.wallet_address, wmr.active_market_count, wmr.largest_market_volume,
         wmr.yes_buy_volume_usd, wmr.no_buy_volume_usd, wmr.buy_volume_usd, wmr.sell_volume_usd,
         wmr.avg_entry_price, wmr.avg_exit_price, wmr.market_categories, wmr.profitable_market_proxy_count,
         wmr.resolved_market_count, wa.anomaly_trigger_count, wa.high_signal_market_count,
-        wa.coordinated_flow_participation
+        wa.coordinated_flow_participation, wp.proxy_pnl_usd, wp.proxy_pnl_sample_count,
+        wp.proxy_pnl_resolved_count, wp.timing_sample_count, wp.favorable_timing_count,
+        wp.poor_timing_count, rd.repeated_directional_market_count
       HAVING SUM(rt.usd_value) > 0
         AND COUNT(*) >= 1
       ORDER BY SUM(rt.usd_value) DESC
@@ -265,6 +351,13 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
       profitable_market_proxy_count: number;
       resolved_market_count: number;
       coordinated_flow_participation: boolean;
+      proxy_pnl_usd: string;
+      proxy_pnl_sample_count: number;
+      proxy_pnl_resolved_count: number;
+      timing_sample_count: number;
+      favorable_timing_count: number;
+      poor_timing_count: number;
+      repeated_directional_market_count: number;
     }>(result).map((row) => ({
       walletAddress: row.wallet_address,
       firstSeenAt: toDate(row.first_seen_at),
@@ -289,7 +382,14 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
       profitableMarketProxyCount: row.profitable_market_proxy_count,
       resolvedMarketCount: row.resolved_market_count,
       specializationTags: specializationTags(row.market_categories ?? []),
-      coordinatedFlowParticipation: row.coordinated_flow_participation
+      coordinatedFlowParticipation: row.coordinated_flow_participation,
+      proxyPnlUsd: toNumber(row.proxy_pnl_usd),
+      proxyPnlSampleCount: row.proxy_pnl_sample_count,
+      proxyPnlResolvedCount: row.proxy_pnl_resolved_count,
+      timingSampleCount: row.timing_sample_count,
+      favorableTimingCount: row.favorable_timing_count,
+      poorTimingCount: row.poor_timing_count,
+      repeatedDirectionalMarketCount: row.repeated_directional_market_count
     }));
   },
 

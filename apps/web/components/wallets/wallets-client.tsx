@@ -20,10 +20,41 @@ import { formatCompactNumber, formatUsd } from "@probis/shared";
 import { useWallets, type WalletsQuery } from "@/lib/api/hooks";
 import { archetypeLabel, shortWalletAddress, walletAliasFromSummary } from "@/lib/wallet-display";
 
+const metadataNumber = (wallet: WalletIntelligenceSummary, key: string) => {
+  const value = wallet.metadata[key];
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const metadataString = (wallet: WalletIntelligenceSummary, key: string) => {
+  const value = wallet.metadata[key];
+  return typeof value === "string" ? value : null;
+};
+
+const formatPercent = (value: number | null) => {
+  if (value === null || !Number.isFinite(value)) return "n/a";
+  return new Intl.NumberFormat("en-US", {
+    style: "percent",
+    maximumFractionDigits: 0
+  }).format(value);
+};
+
+const specializationTags = (wallet: WalletIntelligenceSummary) => {
+  const value = wallet.metadata.specialization_tags;
+  return Array.isArray(value) ? value.map(String).filter(Boolean).slice(0, 3) : [];
+};
+
 function WalletRow({ wallet }: { wallet: WalletIntelligenceSummary }) {
   const alias = walletAliasFromSummary(wallet);
   const archetype =
     typeof wallet.metadata.archetype === "string" ? wallet.metadata.archetype : null;
+  const reliability = metadataNumber(wallet, "reliability_score");
+  const timing = metadataString(wallet, "entry_timing_label") ?? "n/a";
+  const timingConfidence = metadataString(wallet, "entry_timing_confidence") ?? "low";
+  const proxyPnl = metadataNumber(wallet, "proxy_pnl_usd");
+  const proxyWinRate = metadataNumber(wallet, "proxy_win_rate");
+  const tags = specializationTags(wallet);
 
   return (
     <TableRow>
@@ -42,11 +73,36 @@ function WalletRow({ wallet }: { wallet: WalletIntelligenceSummary }) {
       <TableCell>
         <Badge variant="outline">{archetypeLabel(archetype)}</Badge>
       </TableCell>
-      <TableCell className="font-mono">{wallet.smartMoneyScore.toFixed(0)}</TableCell>
+      <TableCell>
+        <div className="font-mono">{reliability === null ? "n/a" : reliability.toFixed(0)}</div>
+        <div className="text-muted-foreground text-xs">
+          {metadataString(wallet, "reliability_confidence") ?? "low"}
+        </div>
+      </TableCell>
       <TableCell className="font-mono">{wallet.convictionScore.toFixed(0)}</TableCell>
-      <TableCell className="font-mono">{wallet.influenceScore.toFixed(0)}</TableCell>
-      <TableCell className="font-mono">{formatUsd(wallet.totalVolumeUsd)}</TableCell>
-      <TableCell className="font-mono">{formatCompactNumber(wallet.activeMarketCount)}</TableCell>
+      <TableCell>
+        <div className="capitalize">{timing}</div>
+        <div className="text-muted-foreground text-xs">{timingConfidence}</div>
+      </TableCell>
+      <TableCell>
+        <div className={`font-mono ${(proxyPnl ?? 0) >= 0 ? "text-emerald-300" : "text-red-300"}`}>
+          {proxyPnl === null ? "n/a" : formatUsd(proxyPnl)}
+        </div>
+        <div className="text-muted-foreground text-xs">win {formatPercent(proxyWinRate)}</div>
+      </TableCell>
+      <TableCell>
+        <div className="flex flex-wrap gap-1">
+          {tags.length ? (
+            tags.map((tag) => (
+              <Badge key={tag} variant="outline">
+                {tag.replace("_", "/")}
+              </Badge>
+            ))
+          ) : (
+            <span className="text-muted-foreground text-xs">n/a</span>
+          )}
+        </div>
+      </TableCell>
       <TableCell>
         <Link
           href={`/wallets/${wallet.walletAddress}?section=anomalies`}
@@ -143,11 +199,11 @@ export function WalletsClient() {
               <TableRow className="hover:bg-transparent">
                 <TableHead>Wallet</TableHead>
                 <TableHead>Archetype</TableHead>
-                <TableHead>Smart</TableHead>
+                <TableHead>Reliability</TableHead>
                 <TableHead>Conviction</TableHead>
-                <TableHead>Influence</TableHead>
-                <TableHead>Total Volume</TableHead>
-                <TableHead>Markets</TableHead>
+                <TableHead>Timing</TableHead>
+                <TableHead>Proxy PnL</TableHead>
+                <TableHead>Specialization</TableHead>
                 <TableHead>Anomalies</TableHead>
                 <TableHead>Last Active</TableHead>
               </TableRow>
