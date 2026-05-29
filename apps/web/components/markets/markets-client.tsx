@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { AlertCircle, ArrowDown, ArrowUp, RefreshCw } from "lucide-react";
+import Link from "next/link";
 import type { MarketListItem } from "@probis/types";
 import {
   Badge,
@@ -50,7 +51,12 @@ function MarketRow({ market }: { market: MarketListItem }) {
   return (
     <TableRow>
       <TableCell className="min-w-72">
-        <div className="text-foreground font-medium">{market.title}</div>
+        <Link
+          href={`/markets/${market.id}`}
+          className="text-foreground font-medium hover:underline"
+        >
+          {market.title}
+        </Link>
         <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-1 text-xs">
           <span>{market.category}</span>
           {market.isActiveUniverse ? (

@@ -4,7 +4,14 @@ export type PolymarketMarket = {
   slug?: string;
   question?: string;
   title?: string;
+  subtitle?: string;
   description?: string;
+  rules?: string;
+  resolutionSource?: string;
+  marketGroup?: string;
+  groupItemTitle?: string;
+  eventTitle?: string;
+  seriesTitle?: string;
   category?: string;
   active?: boolean;
   closed?: boolean;

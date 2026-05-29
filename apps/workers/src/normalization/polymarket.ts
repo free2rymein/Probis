@@ -95,14 +95,44 @@ const CATEGORY_KEYWORDS = {
   technology_ai: ["ai", "openai", "nvidia", "apple", "tesla", "spacex", "google", "microsoft"],
   regulation: ["regulation", "sec", "lawsuit", "ban", "approval", "etf"],
   weather: ["weather", "hurricane", "temperature", "rain", "snow", "storm"],
-  sports: ["sports", "nba", "nfl", "mlb", "nhl", "soccer", "tennis", "ufc", "golf"],
+  sports: [
+    "sports",
+    "nba",
+    "nfl",
+    "mlb",
+    "nhl",
+    "soccer",
+    "football",
+    "uefa",
+    "champions league",
+    "premier league",
+    "la liga",
+    "fifa",
+    "world cup",
+    "tennis",
+    "ufc",
+    "golf"
+  ],
   esports: ["esports", "e-sports", "lol", "league of legends", "valorant", "cs2", "dota"],
   entertainment: ["movie", "oscars", "grammy", "music", "celebrity", "tv", "box office"]
 } as const;
 
 const normalizeCategory = (market: PolymarketMarket, title: string, tags: string[]) => {
   const rawCategory = market.category?.trim().toLowerCase();
-  const text = [rawCategory, title, market.description, market.slug, ...tags]
+  const text = [
+    rawCategory,
+    title,
+    market.description,
+    market.slug,
+    market.subtitle,
+    market.rules,
+    market.resolutionSource,
+    market.marketGroup,
+    market.groupItemTitle,
+    market.eventTitle,
+    market.seriesTitle,
+    ...tags
+  ]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
@@ -224,6 +254,13 @@ export const normalizePolymarketMarket = (market: PolymarketMarket): NormalizedM
       current_probability_no: probabilityMapping.no,
       tags,
       raw_category: market.category ?? null,
+      subtitle: market.subtitle ?? null,
+      rules: market.rules ?? null,
+      resolution_source: market.resolutionSource ?? null,
+      market_group: market.marketGroup ?? null,
+      group_item_title: market.groupItemTitle ?? null,
+      event_title: market.eventTitle ?? null,
+      series_title: market.seriesTitle ?? null,
       gamma_volume: totalVolume,
       gamma_volume_24h: volume24h,
       gamma_liquidity: liquidity,

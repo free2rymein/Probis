@@ -3,6 +3,7 @@ import type {
   AggregatePoint,
   AnomalySignal,
   DashboardMetrics,
+  MarketDetail,
   MarketListItem,
   PaginatedResponse,
   TimelineListItem,
@@ -65,6 +66,15 @@ export function useMarkets(query: MarketsQuery) {
     queryFn: ({ signal }) =>
       apiGet<PaginatedResponse<MarketListItem>>("/api/markets", query, signal),
     placeholderData: (previous) => previous,
+    refetchInterval: REFRESH_INTERVALS.markets
+  });
+}
+
+export function useMarketDetail(marketId: string) {
+  return useQuery({
+    queryKey: ["market", marketId],
+    queryFn: ({ signal }) => apiGet<MarketDetail>(`/api/markets/${marketId}`, {}, signal),
+    enabled: Boolean(marketId),
     refetchInterval: REFRESH_INTERVALS.markets
   });
 }

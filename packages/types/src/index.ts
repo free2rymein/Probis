@@ -124,6 +124,50 @@ export type AggregatePoint = {
   tradeCount: number;
 };
 
+export type MarketProbabilityPoint = {
+  bucket: string;
+  yesProbability: number;
+};
+
+export type MarketVolumePoint = {
+  bucket: string;
+  volume: number;
+  tradeCount: number;
+};
+
+export type MarketRecentTrade = {
+  id: string;
+  walletAddress: string;
+  side: "buy" | "sell";
+  price: number;
+  quantity: number;
+  usdValue: number;
+  outcome: string | null;
+  tradeTimestamp: string;
+};
+
+export type MarketWalletFlow = {
+  walletAddress: string;
+  buyVolumeUsd: number;
+  sellVolumeUsd: number;
+  netFlowUsd: number;
+  tradeCount: number;
+  lastTradeAt: string;
+};
+
+export type MarketDetail = {
+  market: MarketListItem & {
+    description: string | null;
+    conditionId: string | null;
+    clobTokenIds: string[];
+    resolutionDate: string | null;
+  };
+  probabilityHistory: MarketProbabilityPoint[];
+  volumeHistory: MarketVolumePoint[];
+  recentTrades: MarketRecentTrade[];
+  walletFlows: MarketWalletFlow[];
+};
+
 export type TimelineListItem = {
   id: string;
   marketId: string;
