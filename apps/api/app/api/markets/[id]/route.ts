@@ -1,4 +1,4 @@
-import type { MarketDetail } from "@probis/types";
+import type { MarketDetail, MarketTimelineItem, WalletArchetype } from "@probis/types";
 import { getSql } from "@/lib/db";
 import { withApiHandler } from "@/lib/handler";
 import { corsHeaders, fail, ok } from "@/lib/responses";
@@ -37,6 +37,109 @@ type MarketRow = {
   latest_aggregate_bucket: Date | null;
   resolution_date: Date | null;
   updated_at: Date;
+};
+
+const archetypes = new Set<WalletArchetype>([
+  "whale",
+  "sniper",
+  "momentum_trader",
+  "high_frequency_scalper",
+  "concentrated_conviction_buyer",
+  "broad_diversified_trader",
+  "emerging_wallet",
+  "inactive_wallet",
+  "low_activity_wallet",
+  "directional_buyer",
+  "directional_seller"
+]);
+
+const metadataString = (metadata: Record<string, unknown> | null, key: string) => {
+  const value = metadata?.[key];
+  return typeof value === "string" ? value : null;
+};
+
+const metadataNumber = (metadata: Record<string, unknown> | null, key: string) => {
+  const value = metadata?.[key];
+  const parsed =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const walletArchetype = (metadata: Record<string, unknown> | null) => {
+  const value = metadataString(metadata, "archetype");
+  return value && archetypes.has(value as WalletArchetype) ? (value as WalletArchetype) : null;
+};
+
+const severityLabel = (score: number): MarketTimelineItem["severity"] => {
+  if (score >= 70) return "high impact";
+  if (score >= 45) return "meaningful";
+  return "watchlist";
+};
+
+const anomalyTitle = (anomalyType: string, signalKind: string | null) => {
+  if (signalKind === "large_concentrated_yes_buying") return "Large concentrated YES buying";
+  if (signalKind === "high_conviction_accumulation") return "High-conviction accumulation";
+  if (signalKind === "unusual_wallet_activity") return "Unusual wallet activity";
+  if (signalKind === "synchronized_directional_flow") return "Synchronized directional flow";
+  return anomalyType.replaceAll("_", " ");
+};
+
+const formatNumber = (value: number) =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    maximumFractionDigits: 1
+  }).format(value);
+
+const buildReplaySummary = (timeline: MarketTimelineItem[]): MarketDetail["replaySummary"] => {
+  if (timeline.length === 0) {
+    return {
+      headline: "No replayable market intelligence yet.",
+      sequence:
+        "The market has not accumulated enough probability, volume, trade, or anomaly events.",
+      walletFlowTiming: "No wallet-flow timing relationship is available.",
+      activityState: "quiet"
+    };
+  }
+
+  const chronological = [...timeline].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+  const first = chronological[0];
+  const firstProbability = chronological.find((item) => item.eventType === "probability_move");
+  const firstWalletFlow = chronological.find(
+    (item) => item.eventType === "wallet_flow_anomaly" || item.eventType === "large_trade"
+  );
+  const anomalyCount = timeline.filter((item) => item.eventType === "wallet_flow_anomaly").length;
+  const concentratedCount = timeline.filter(
+    (item) => item.eventType === "wallet_flow_anomaly" || item.eventType === "large_trade"
+  ).length;
+  const highImpactCount = timeline.filter((item) => item.severity === "high impact").length;
+
+  let activityState: MarketDetail["replaySummary"]["activityState"] = "quiet";
+  if (highImpactCount > 0 || anomalyCount >= 2) activityState = "unusual";
+  else if (concentratedCount >= 3) activityState = "concentrated";
+  else if (timeline.length >= 4) activityState = "elevated";
+
+  let walletFlowTiming = "Wallet flow and probability movement have not overlapped clearly yet.";
+  if (firstProbability && firstWalletFlow) {
+    const probabilityTime = new Date(firstProbability.timestamp).getTime();
+    const walletTime = new Date(firstWalletFlow.timestamp).getTime();
+    walletFlowTiming =
+      walletTime < probabilityTime
+        ? "Wallet flow appeared before the first observed probability move; treat this as correlation, not proven causality."
+        : walletTime > probabilityTime
+          ? "Wallet flow appeared after the first observed probability move; this may reflect reaction rather than cause."
+          : "Wallet flow and probability movement appeared in the same observed minute.";
+  }
+
+  return {
+    headline: `${activityState[0]?.toUpperCase()}${activityState.slice(1)} recent market activity.`,
+    sequence: `First replayable event: ${first?.explanation ?? "n/a"}`,
+    walletFlowTiming,
+    activityState
+  };
 };
 
 export const GET = withApiHandler(async (_request, { requestId }, routeContext) => {
@@ -96,7 +199,7 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
     return fail("NOT_FOUND", "Market not found.", requestId, { status: 404 });
   }
 
-  const [probabilityRows, volumeRows, tradeRows, walletRows] = await Promise.all([
+  const [probabilityRows, volumeRows, tradeRows, walletRows, anomalyRows] = await Promise.all([
     sql<Array<{ bucket: Date; yes_probability: string }>>`
       SELECT
         date_trunc('minute', trade_timestamp) AS bucket,
@@ -119,6 +222,7 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
       Array<{
         id: string;
         wallet_address: string;
+        wallet_metadata: Record<string, unknown> | null;
         side: "buy" | "sell";
         price: string;
         quantity: string;
@@ -127,15 +231,26 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
         trade_timestamp: Date;
       }>
     >`
-      SELECT id, wallet_address, side::text AS side, price::text, quantity::text, usd_value::text, outcome, trade_timestamp
-      FROM trades
-      WHERE market_id = ${id}
-      ORDER BY trade_timestamp DESC
+      SELECT
+        t.id,
+        t.wallet_address,
+        wp.metadata AS wallet_metadata,
+        t.side::text AS side,
+        t.price::text,
+        t.quantity::text,
+        t.usd_value::text,
+        t.outcome,
+        t.trade_timestamp
+      FROM trades t
+      LEFT JOIN wallet_profiles wp ON wp.wallet_address = t.wallet_address
+      WHERE t.market_id = ${id}
+      ORDER BY t.trade_timestamp DESC
       LIMIT 50
     `,
     sql<
       Array<{
         wallet_address: string;
+        wallet_metadata: Record<string, unknown> | null;
         buy_volume_usd: string;
         sell_volume_usd: string;
         net_flow_usd: string;
@@ -144,26 +259,151 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
       }>
     >`
       SELECT
-        wallet_address,
-        COALESCE(SUM(usd_value) FILTER (WHERE side = 'buy'), 0)::text AS buy_volume_usd,
-        COALESCE(SUM(usd_value) FILTER (WHERE side = 'sell'), 0)::text AS sell_volume_usd,
+        t.wallet_address,
+        wp.metadata AS wallet_metadata,
+        COALESCE(SUM(t.usd_value) FILTER (WHERE t.side = 'buy'), 0)::text AS buy_volume_usd,
+        COALESCE(SUM(t.usd_value) FILTER (WHERE t.side = 'sell'), 0)::text AS sell_volume_usd,
         (
-          COALESCE(SUM(usd_value) FILTER (WHERE side = 'buy'), 0)
-          - COALESCE(SUM(usd_value) FILTER (WHERE side = 'sell'), 0)
+          COALESCE(SUM(t.usd_value) FILTER (WHERE t.side = 'buy'), 0)
+          - COALESCE(SUM(t.usd_value) FILTER (WHERE t.side = 'sell'), 0)
         )::text AS net_flow_usd,
         COUNT(*)::text AS trade_count,
-        MAX(trade_timestamp) AS last_trade_at
-      FROM trades
-      WHERE market_id = ${id}
-        AND trade_timestamp >= now() - interval '7 days'
-      GROUP BY wallet_address
+        MAX(t.trade_timestamp) AS last_trade_at
+      FROM trades t
+      LEFT JOIN wallet_profiles wp ON wp.wallet_address = t.wallet_address
+      WHERE t.market_id = ${id}
+        AND t.trade_timestamp >= now() - interval '7 days'
+      GROUP BY t.wallet_address, wp.metadata
       ORDER BY COUNT(*) DESC, ABS(
-        COALESCE(SUM(usd_value) FILTER (WHERE side = 'buy'), 0)
-        - COALESCE(SUM(usd_value) FILTER (WHERE side = 'sell'), 0)
+        COALESCE(SUM(t.usd_value) FILTER (WHERE t.side = 'buy'), 0)
+        - COALESCE(SUM(t.usd_value) FILTER (WHERE t.side = 'sell'), 0)
       ) DESC
       LIMIT 20
+    `,
+    sql<
+      Array<{
+        id: string;
+        anomaly_type: string;
+        severity_score: string;
+        confidence_score: string;
+        summary: string;
+        wallet_addresses: string[] | null;
+        metadata: Record<string, unknown>;
+        detected_at: Date;
+      }>
+    >`
+      SELECT
+        id,
+        anomaly_type::text,
+        severity_score::text,
+        confidence_score::text,
+        summary,
+        wallet_addresses,
+        metadata,
+        detected_at
+      FROM anomaly_events
+      WHERE market_id = ${id}
+      ORDER BY detected_at DESC
+      LIMIT 30
     `
   ]);
+
+  const probabilityHistory = probabilityRows.reverse().map((row) => ({
+    bucket: row.bucket.toISOString(),
+    yesProbability: Number(row.yes_probability)
+  }));
+  const volumeHistory = volumeRows.reverse().map((row) => ({
+    bucket: row.bucket.toISOString(),
+    volume: Number(row.volume),
+    tradeCount: row.trade_count
+  }));
+  const largeTradeThreshold = Math.max(1_000, Number(market.volume_24h ?? 0) * 0.02);
+  const probabilityEvents: MarketTimelineItem[] = [];
+  for (let index = 1; index < probabilityHistory.length; index += 1) {
+    const previous = probabilityHistory[index - 1];
+    const current = probabilityHistory[index];
+    if (!previous || !current) continue;
+    const delta = current.yesProbability - previous.yesProbability;
+    if (Math.abs(delta) < 0.03) continue;
+    probabilityEvents.push({
+      id: `probability-${current.bucket}`,
+      timestamp: current.bucket,
+      eventType: "probability_move",
+      direction: delta > 0 ? "YES up" : "YES down",
+      walletAddress: null,
+      walletArchetype: null,
+      marketImpact: `${delta > 0 ? "+" : ""}${(delta * 100).toFixed(1)} pts`,
+      explanation: `YES probability ${delta > 0 ? "rose" : "fell"} ${(
+        Math.abs(delta) * 100
+      ).toFixed(1)} percentage points versus the prior observed minute.`,
+      severity: Math.abs(delta) >= 0.1 ? "high impact" : "meaningful",
+      confidence: 70
+    });
+  }
+  const averageVolume =
+    volumeHistory.reduce((sum, point) => sum + point.volume, 0) / Math.max(1, volumeHistory.length);
+  const volumeEvents = volumeHistory
+    .filter((point) => point.volume > 0 && averageVolume > 0 && point.volume >= averageVolume * 2)
+    .map(
+      (point): MarketTimelineItem => ({
+        id: `volume-${point.bucket}`,
+        timestamp: point.bucket,
+        eventType: "volume_spike",
+        direction: null,
+        walletAddress: null,
+        walletArchetype: null,
+        marketImpact: `${(point.volume / averageVolume).toFixed(1)}x baseline`,
+        explanation: `Trading volume reached ${formatNumber(point.volume)} versus a recent baseline of ${formatNumber(
+          averageVolume
+        )}.`,
+        severity: point.volume >= averageVolume * 4 ? "high impact" : "meaningful",
+        confidence: 65
+      })
+    );
+  const largeTradeEvents = tradeRows
+    .filter((row) => Number(row.usd_value) >= largeTradeThreshold)
+    .slice(0, 15)
+    .map(
+      (row): MarketTimelineItem => ({
+        id: `trade-${row.id}`,
+        timestamp: row.trade_timestamp.toISOString(),
+        eventType: "large_trade",
+        direction: `${row.outcome?.toUpperCase() ?? "unknown"} ${row.side}`,
+        walletAddress: row.wallet_address,
+        walletArchetype: walletArchetype(row.wallet_metadata),
+        marketImpact: formatNumber(Number(row.usd_value)),
+        explanation: `Large ${row.outcome ?? "outcome"} ${row.side} of ${formatNumber(
+          Number(row.usd_value)
+        )} printed at ${Math.round(Number(row.price) * 100)}%.`,
+        severity: Number(row.usd_value) >= largeTradeThreshold * 3 ? "high impact" : "meaningful",
+        confidence: 75
+      })
+    );
+  const anomalyEvents = anomalyRows.map((row): MarketTimelineItem => {
+    const signalKind = metadataString(row.metadata, "signal_kind");
+    const volume =
+      metadataNumber(row.metadata, "total_volume_usd") ??
+      metadataNumber(row.metadata, "usd_value") ??
+      metadataNumber(row.metadata, "max_trade_usd");
+    const side = metadataString(row.metadata, "side");
+    const outcome = metadataString(row.metadata, "outcome");
+    return {
+      id: `anomaly-${row.id}`,
+      timestamp: row.detected_at.toISOString(),
+      eventType: "wallet_flow_anomaly",
+      direction: outcome ? `${outcome.toUpperCase()} ${side ?? "flow"}` : side,
+      walletAddress: row.wallet_addresses?.[0] ?? null,
+      walletArchetype: null,
+      marketImpact: volume === null ? null : formatNumber(volume),
+      explanation: `${anomalyTitle(row.anomaly_type, signalKind)}. ${row.summary}`,
+      severity: severityLabel(Number(row.severity_score)),
+      confidence: Number(row.confidence_score)
+    };
+  });
+  const timeline = [...probabilityEvents, ...volumeEvents, ...largeTradeEvents, ...anomalyEvents]
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 40);
+  const replaySummary = buildReplaySummary(timeline);
 
   const data: MarketDetail = {
     market: {
@@ -200,18 +440,12 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
       resolutionDate: market.resolution_date?.toISOString() ?? null,
       updatedAt: market.updated_at.toISOString()
     },
-    probabilityHistory: probabilityRows.reverse().map((row) => ({
-      bucket: row.bucket.toISOString(),
-      yesProbability: Number(row.yes_probability)
-    })),
-    volumeHistory: volumeRows.reverse().map((row) => ({
-      bucket: row.bucket.toISOString(),
-      volume: Number(row.volume),
-      tradeCount: row.trade_count
-    })),
+    probabilityHistory,
+    volumeHistory,
     recentTrades: tradeRows.map((row) => ({
       id: row.id,
       walletAddress: row.wallet_address,
+      walletArchetype: walletArchetype(row.wallet_metadata),
       side: row.side,
       price: Number(row.price),
       quantity: Number(row.quantity),
@@ -221,12 +455,15 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
     })),
     walletFlows: walletRows.map((row) => ({
       walletAddress: row.wallet_address,
+      walletArchetype: walletArchetype(row.wallet_metadata),
       buyVolumeUsd: Number(row.buy_volume_usd),
       sellVolumeUsd: Number(row.sell_volume_usd),
       netFlowUsd: Number(row.net_flow_usd),
       tradeCount: Number(row.trade_count),
       lastTradeAt: row.last_trade_at.toISOString()
-    }))
+    })),
+    timeline,
+    replaySummary
   };
 
   return ok(data, requestId);

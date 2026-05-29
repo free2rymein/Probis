@@ -2,6 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 import type { ProbisDatabase } from "@probis/database";
 import type {
   CoordinatedActivityCandidate,
+  SmartFlowCandidate,
   WalletDailyInput,
   WalletMarketInput,
   WalletProfileInput,
@@ -42,6 +43,23 @@ const textInSql = (values: string[]) =>
     values.map((value) => sql`${value}`),
     sql`, `
   )})`;
+
+const specializationTags = (categories: string[]) => {
+  const text = categories.join(" ").toLowerCase();
+  const tags = new Set<string>();
+  if (text.includes("crypto") || text.includes("bitcoin") || text.includes("ethereum")) {
+    tags.add("crypto");
+  }
+  if (text.includes("geopolitics") || text.includes("war") || text.includes("foreign")) {
+    tags.add("geopolitics");
+  }
+  if (text.includes("macro") || text.includes("finance") || text.includes("rates")) {
+    tags.add("macro");
+  }
+  if (text.includes("politics") || text.includes("election")) tags.add("politics");
+  if (text.includes("tech") || text.includes("ai") || text.includes("chips")) tags.add("tech_ai");
+  return [...tags];
+};
 
 export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
   async getRecentTradeStats(since: Date) {
@@ -97,13 +115,55 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
     const sinceIso = since.toISOString();
     const result = await db.execute(sql`
       WITH recent_trades AS (
-        SELECT wallet_address, market_id, usd_value::numeric AS usd_value, trade_timestamp
-        FROM trades
-        WHERE trade_timestamp >= ${sinceIso}
-          AND NOT (${invalidWalletSql})
+        SELECT
+          t.wallet_address,
+          t.market_id,
+          t.usd_value::numeric AS usd_value,
+          t.price::numeric AS price,
+          t.side::text AS side,
+          lower(COALESCE(t.outcome, '')) AS outcome,
+          t.trade_timestamp,
+          m.status::text AS market_status,
+          m.category AS market_category,
+          m.resolution_date,
+          m.current_probability_yes::numeric AS current_probability_yes
+        FROM trades t
+        LEFT JOIN markets m ON m.id = t.market_id
+        WHERE t.trade_timestamp >= ${sinceIso}
+          AND t.wallet_address IS NOT NULL
+          AND t.wallet_address != ''
+          AND t.wallet_address != '0x0000000000000000000000000000000000000000'
+          AND t.wallet_address != '0x0000000000000000000000000000000000000001'
       ),
       wallet_market AS (
-        SELECT wallet_address, market_id, SUM(usd_value) AS market_volume
+        SELECT
+          wallet_address,
+          market_id,
+          SUM(usd_value) AS market_volume,
+          SUM(usd_value) FILTER (WHERE side = 'buy') AS buy_volume_usd,
+          SUM(usd_value) FILTER (WHERE side = 'sell') AS sell_volume_usd,
+          SUM(usd_value) FILTER (WHERE side = 'buy' AND outcome = 'yes') AS yes_buy_volume_usd,
+          SUM(usd_value) FILTER (WHERE side = 'buy' AND outcome = 'no') AS no_buy_volume_usd,
+          AVG(price) FILTER (WHERE side = 'buy') AS avg_entry_price,
+          AVG(price) FILTER (WHERE side = 'sell') AS avg_exit_price,
+          BOOL_OR(market_status = 'settled' OR resolution_date <= now()) AS has_resolution_proxy,
+          CASE
+            WHEN BOOL_OR(market_status = 'settled' OR resolution_date <= now()) THEN
+              CASE
+                WHEN COALESCE(SUM(usd_value) FILTER (WHERE side = 'buy' AND outcome = 'yes'), 0)
+                  >= COALESCE(SUM(usd_value) FILTER (WHERE side = 'buy' AND outcome = 'no'), 0)
+                  AND COALESCE(AVG(price) FILTER (WHERE side = 'buy' AND outcome = 'yes'), 1)
+                    < COALESCE(MAX(current_probability_yes), 0)
+                  THEN 1
+                WHEN COALESCE(SUM(usd_value) FILTER (WHERE side = 'buy' AND outcome = 'no'), 0)
+                  > COALESCE(SUM(usd_value) FILTER (WHERE side = 'buy' AND outcome = 'yes'), 0)
+                  AND COALESCE(AVG(price) FILTER (WHERE side = 'buy' AND outcome = 'no'), 1)
+                    < 1 - COALESCE(MAX(current_probability_yes), 1)
+                  THEN 1
+                ELSE 0
+              END
+            ELSE 0
+          END AS profitable_market_proxy
         FROM recent_trades
         GROUP BY wallet_address, market_id
       ),
@@ -111,7 +171,17 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
         SELECT
           wallet_address,
           COUNT(*)::int AS active_market_count,
-          MAX(market_volume) AS largest_market_volume
+          MAX(market_volume) AS largest_market_volume,
+          COALESCE(SUM(buy_volume_usd), 0) AS buy_volume_usd,
+          COALESCE(SUM(sell_volume_usd), 0) AS sell_volume_usd,
+          COALESCE(SUM(yes_buy_volume_usd), 0) AS yes_buy_volume_usd,
+          COALESCE(SUM(no_buy_volume_usd), 0) AS no_buy_volume_usd,
+          COALESCE(AVG(avg_entry_price), 0) AS avg_entry_price,
+          COALESCE(AVG(avg_exit_price), 0) AS avg_exit_price,
+          ARRAY_AGG(DISTINCT market_category) FILTER (WHERE market_category IS NOT NULL)
+            AS market_categories,
+          COUNT(*) FILTER (WHERE has_resolution_proxy)::int AS resolved_market_count,
+          COALESCE(SUM(profitable_market_proxy), 0)::int AS profitable_market_proxy_count
         FROM wallet_market
         GROUP BY wallet_address
       ),
@@ -119,7 +189,11 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
         SELECT
           unnest(wallet_addresses) AS wallet_address,
           COUNT(*)::int AS anomaly_trigger_count,
-          COUNT(DISTINCT market_id)::int AS high_signal_market_count
+          COUNT(DISTINCT market_id)::int AS high_signal_market_count,
+          BOOL_OR(
+            anomaly_type::text = 'coordinated_wallet_activity'
+            OR metadata->>'signal_kind' = 'synchronized_directional_flow'
+          ) AS coordinated_flow_participation
         FROM anomaly_events
         WHERE detected_at >= ${sinceIso}
           AND array_length(wallet_addresses, 1) > 0
@@ -135,14 +209,31 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
         COUNT(*) FILTER (WHERE rt.usd_value >= ${largeTradeThresholdUsd})::int AS large_trade_count,
         AVG(rt.usd_value)::text AS average_trade_usd,
         MAX(rt.usd_value)::text AS max_trade_usd,
+        COALESCE(SUM(rt.usd_value) FILTER (WHERE rt.trade_timestamp >= now() - interval '24 hours'), 0)::text
+          AS recent_24h_volume_usd,
+        COUNT(*) FILTER (WHERE rt.trade_timestamp >= now() - interval '24 hours')::int
+          AS recent_24h_trade_count,
         COALESCE(wa.anomaly_trigger_count, 0)::int AS anomaly_trigger_count,
         COALESCE(wa.high_signal_market_count, 0)::int AS high_signal_market_count,
-        (wmr.largest_market_volume / NULLIF(SUM(rt.usd_value), 0))::text AS market_concentration
+        (wmr.largest_market_volume / NULLIF(SUM(rt.usd_value), 0))::text AS market_concentration,
+        COALESCE(wmr.yes_buy_volume_usd, 0)::text AS yes_buy_volume_usd,
+        COALESCE(wmr.no_buy_volume_usd, 0)::text AS no_buy_volume_usd,
+        COALESCE(wmr.buy_volume_usd, 0)::text AS buy_volume_usd,
+        COALESCE(wmr.sell_volume_usd, 0)::text AS sell_volume_usd,
+        COALESCE(wmr.avg_entry_price, 0)::text AS avg_entry_price,
+        COALESCE(wmr.avg_exit_price, 0)::text AS avg_exit_price,
+        COALESCE(wmr.market_categories, ARRAY[]::text[]) AS market_categories,
+        COALESCE(wmr.profitable_market_proxy_count, 0)::int AS profitable_market_proxy_count,
+        COALESCE(wmr.resolved_market_count, 0)::int AS resolved_market_count,
+        COALESCE(wa.coordinated_flow_participation, false) AS coordinated_flow_participation
       FROM recent_trades rt
       LEFT JOIN wallet_market_rollup wmr ON wmr.wallet_address = rt.wallet_address
       LEFT JOIN wallet_anomalies wa ON wa.wallet_address = rt.wallet_address
       GROUP BY rt.wallet_address, wmr.active_market_count, wmr.largest_market_volume,
-        wa.anomaly_trigger_count, wa.high_signal_market_count
+        wmr.yes_buy_volume_usd, wmr.no_buy_volume_usd, wmr.buy_volume_usd, wmr.sell_volume_usd,
+        wmr.avg_entry_price, wmr.avg_exit_price, wmr.market_categories, wmr.profitable_market_proxy_count,
+        wmr.resolved_market_count, wa.anomaly_trigger_count, wa.high_signal_market_count,
+        wa.coordinated_flow_participation
       HAVING SUM(rt.usd_value) > 0
         AND COUNT(*) >= 1
       ORDER BY SUM(rt.usd_value) DESC
@@ -159,9 +250,21 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
       large_trade_count: number;
       average_trade_usd: string;
       max_trade_usd: string;
+      recent_24h_volume_usd: string;
+      recent_24h_trade_count: number;
       anomaly_trigger_count: number;
       high_signal_market_count: number;
       market_concentration: string | null;
+      yes_buy_volume_usd: string;
+      no_buy_volume_usd: string;
+      buy_volume_usd: string;
+      sell_volume_usd: string;
+      avg_entry_price: string;
+      avg_exit_price: string;
+      market_categories: string[] | null;
+      profitable_market_proxy_count: number;
+      resolved_market_count: number;
+      coordinated_flow_participation: boolean;
     }>(result).map((row) => ({
       walletAddress: row.wallet_address,
       firstSeenAt: toDate(row.first_seen_at),
@@ -172,9 +275,21 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
       largeTradeCount: row.large_trade_count,
       averageTradeUsd: toNumber(row.average_trade_usd),
       maxTradeUsd: toNumber(row.max_trade_usd),
+      recent24hVolumeUsd: toNumber(row.recent_24h_volume_usd),
+      recent24hTradeCount: row.recent_24h_trade_count,
       anomalyTriggerCount: row.anomaly_trigger_count,
       highSignalMarketCount: row.high_signal_market_count,
-      marketConcentration: toNumber(row.market_concentration)
+      marketConcentration: toNumber(row.market_concentration),
+      yesBuyVolumeUsd: toNumber(row.yes_buy_volume_usd),
+      noBuyVolumeUsd: toNumber(row.no_buy_volume_usd),
+      buyVolumeUsd: toNumber(row.buy_volume_usd),
+      sellVolumeUsd: toNumber(row.sell_volume_usd),
+      avgEntryPrice: toNumber(row.avg_entry_price),
+      avgExitPrice: toNumber(row.avg_exit_price),
+      profitableMarketProxyCount: row.profitable_market_proxy_count,
+      resolvedMarketCount: row.resolved_market_count,
+      specializationTags: specializationTags(row.market_categories ?? []),
+      coordinatedFlowParticipation: row.coordinated_flow_participation
     }));
   },
 
@@ -443,6 +558,96 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
     }));
   },
 
+  async getSmartFlowCandidates(since: Date, minVolumeUsd: number): Promise<SmartFlowCandidate[]> {
+    const sinceIso = since.toISOString();
+    const result = await db.execute(sql`
+      WITH directional_flow AS (
+        SELECT
+          t.market_id,
+          m.title AS market_title,
+          t.side::text AS side,
+          lower(COALESCE(t.outcome, 'unknown')) AS outcome,
+          ARRAY_AGG(DISTINCT t.wallet_address) AS wallet_addresses,
+          COUNT(*)::int AS trade_count,
+          SUM(t.usd_value::numeric)::text AS total_volume_usd,
+          MAX(wallet_market.wallet_volume_usd)::text AS max_wallet_volume_usd,
+          MIN(t.trade_timestamp) AS started_at,
+          MAX(t.trade_timestamp) AS ended_at
+        FROM trades t
+        INNER JOIN markets m ON m.id = t.market_id
+        INNER JOIN (
+          SELECT market_id, wallet_address, SUM(usd_value::numeric) AS wallet_volume_usd
+          FROM trades
+          WHERE trade_timestamp >= ${sinceIso}
+            AND NOT (${invalidWalletSql})
+          GROUP BY market_id, wallet_address
+        ) wallet_market
+          ON wallet_market.market_id = t.market_id
+          AND wallet_market.wallet_address = t.wallet_address
+        WHERE t.trade_timestamp >= ${sinceIso}
+          AND NOT (${invalidWalletSql})
+        GROUP BY t.market_id, m.title, t.side::text, lower(COALESCE(t.outcome, 'unknown')),
+          date_trunc('minute', t.trade_timestamp)
+      )
+      SELECT
+        market_id,
+        market_title,
+        side,
+        NULLIF(outcome, 'unknown') AS outcome,
+        wallet_addresses,
+        trade_count,
+        total_volume_usd,
+        max_wallet_volume_usd,
+        started_at,
+        ended_at,
+        CASE
+          WHEN side = 'buy' AND outcome = 'yes' AND total_volume_usd::numeric >= ${minVolumeUsd * 2}
+            THEN 'large_concentrated_yes_buying'
+          WHEN max_wallet_volume_usd::numeric / NULLIF(total_volume_usd::numeric, 0) >= 0.65
+            THEN 'high_conviction_accumulation'
+          WHEN trade_count >= 8 AND total_volume_usd::numeric >= ${minVolumeUsd}
+            THEN 'unusual_wallet_activity'
+          ELSE 'synchronized_directional_flow'
+        END AS signal_kind
+      FROM directional_flow
+      WHERE total_volume_usd::numeric >= ${minVolumeUsd}
+        AND (
+          (side = 'buy' AND outcome = 'yes' AND total_volume_usd::numeric >= ${minVolumeUsd * 2})
+          OR max_wallet_volume_usd::numeric / NULLIF(total_volume_usd::numeric, 0) >= 0.65
+          OR trade_count >= 8
+          OR array_length(wallet_addresses, 1) >= 3
+        )
+      ORDER BY total_volume_usd::numeric DESC, trade_count DESC
+      LIMIT 30
+    `);
+
+    return rows<{
+      market_id: string;
+      market_title: string;
+      side: "buy" | "sell";
+      outcome: string | null;
+      wallet_addresses: string[];
+      trade_count: number;
+      total_volume_usd: string;
+      max_wallet_volume_usd: string;
+      started_at: Date | string;
+      ended_at: Date | string;
+      signal_kind: SmartFlowCandidate["signalKind"];
+    }>(result).map((row) => ({
+      marketId: row.market_id,
+      marketTitle: row.market_title,
+      walletAddresses: row.wallet_addresses,
+      side: row.side,
+      outcome: row.outcome,
+      tradeCount: row.trade_count,
+      totalVolumeUsd: toNumber(row.total_volume_usd),
+      maxWalletVolumeUsd: toNumber(row.max_wallet_volume_usd),
+      startedAt: toDate(row.started_at),
+      endedAt: toDate(row.ended_at),
+      signalKind: row.signal_kind
+    }));
+  },
+
   async findRecentDuplicate(marketId: string, anomalyType: string, since: Date) {
     const sinceIso = since.toISOString();
     const result = await db.execute(sql`
@@ -459,7 +664,11 @@ export const createWalletIntelligenceRepository = (db: ProbisDatabase) => ({
 
   async insertWalletAnomaly(input: {
     marketId: string;
-    anomalyType: "repeat_whale_activity" | "coordinated_wallet_activity";
+    anomalyType:
+      | "whale_activity"
+      | "repeat_whale_activity"
+      | "wallet_cluster"
+      | "coordinated_wallet_activity";
     severityScore: number;
     confidenceScore: number;
     summary: string;

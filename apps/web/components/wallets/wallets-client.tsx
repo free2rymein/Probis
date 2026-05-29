@@ -18,19 +18,29 @@ import {
 } from "@probis/ui";
 import { formatCompactNumber, formatUsd } from "@probis/shared";
 import { useWallets, type WalletsQuery } from "@/lib/api/hooks";
-
-const shortAddress = (address: string) => `${address.slice(0, 6)}...${address.slice(-4)}`;
+import { archetypeLabel, shortWalletAddress, walletAliasFromSummary } from "@/lib/wallet-display";
 
 function WalletRow({ wallet }: { wallet: WalletIntelligenceSummary }) {
+  const alias = walletAliasFromSummary(wallet);
+  const archetype =
+    typeof wallet.metadata.archetype === "string" ? wallet.metadata.archetype : null;
+
   return (
     <TableRow>
       <TableCell className="min-w-56">
         <Link
           href={`/wallets/${wallet.walletAddress}`}
-          className="font-mono font-medium hover:underline"
+          title={wallet.walletAddress}
+          className="font-medium hover:underline"
         >
-          {shortAddress(wallet.walletAddress)}
+          {alias}
         </Link>
+        <div className="text-muted-foreground mt-1 font-mono text-xs">
+          {shortWalletAddress(wallet.walletAddress)}
+        </div>
+      </TableCell>
+      <TableCell>
+        <Badge variant="outline">{archetypeLabel(archetype)}</Badge>
       </TableCell>
       <TableCell className="font-mono">{wallet.smartMoneyScore.toFixed(0)}</TableCell>
       <TableCell className="font-mono">{wallet.convictionScore.toFixed(0)}</TableCell>
@@ -38,9 +48,18 @@ function WalletRow({ wallet }: { wallet: WalletIntelligenceSummary }) {
       <TableCell className="font-mono">{formatUsd(wallet.totalVolumeUsd)}</TableCell>
       <TableCell className="font-mono">{formatCompactNumber(wallet.activeMarketCount)}</TableCell>
       <TableCell>
-        <Badge variant={wallet.anomalyTriggerCount > 0 ? "warning" : "outline"}>
-          {wallet.anomalyTriggerCount}
-        </Badge>
+        <Link
+          href={`/wallets/${wallet.walletAddress}?section=anomalies`}
+          title="Open anomaly drilldown"
+          className="inline-flex"
+        >
+          <Badge
+            variant={wallet.anomalyTriggerCount > 0 ? "warning" : "outline"}
+            className={wallet.anomalyTriggerCount > 0 ? "hover:bg-amber-900/60" : ""}
+          >
+            {wallet.anomalyTriggerCount}
+          </Badge>
+        </Link>
       </TableCell>
       <TableCell className="text-muted-foreground whitespace-nowrap font-mono text-xs">
         {new Date(wallet.lastActiveAt).toLocaleString()}
@@ -123,6 +142,7 @@ export function WalletsClient() {
             <TableHeader className="border-border sticky top-0 z-30 border-b bg-[#090d14] [&_th]:bg-[#090d14]">
               <TableRow className="hover:bg-transparent">
                 <TableHead>Wallet</TableHead>
+                <TableHead>Archetype</TableHead>
                 <TableHead>Smart</TableHead>
                 <TableHead>Conviction</TableHead>
                 <TableHead>Influence</TableHead>

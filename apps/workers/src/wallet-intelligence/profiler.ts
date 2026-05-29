@@ -135,6 +135,7 @@ export class WalletIntelligenceProfiler {
       )
     );
     await this.emitCoordinatedActivitySignals(since);
+    await this.emitSmartFlowSignals(since);
 
     logger.info("wallet_intelligence.complete", {
       profilesUpdated: scoredProfiles.length,
@@ -243,6 +244,73 @@ export class WalletIntelligenceProfiler {
         anomalyType: "coordinated_wallet_activity",
         marketId: candidate.marketId,
         walletCount: candidate.walletAddresses.length
+      });
+    }
+  }
+
+  private async emitSmartFlowSignals(since: Date) {
+    const candidates = await this.repository.getSmartFlowCandidates(
+      since,
+      Math.max(1_000, this.config.WHALE_TRADE_USD_THRESHOLD / 2)
+    );
+
+    const labels: Record<(typeof candidates)[number]["signalKind"], string> = {
+      large_concentrated_yes_buying: "Large concentrated YES buying detected",
+      high_conviction_accumulation: "High-conviction accumulation detected",
+      unusual_wallet_activity: "Unusual wallet activity vs recent baseline",
+      synchronized_directional_flow: "Synchronized same-direction wallet flow"
+    };
+
+    for (const candidate of candidates.slice(0, 12)) {
+      const anomalyType =
+        candidate.signalKind === "synchronized_directional_flow"
+          ? "coordinated_wallet_activity"
+          : candidate.signalKind === "large_concentrated_yes_buying"
+            ? "whale_activity"
+            : "wallet_cluster";
+      const duplicate = await this.repository.findRecentDuplicate(
+        candidate.marketId,
+        anomalyType,
+        new Date(Date.now() - 30 * 60_000)
+      );
+      if (duplicate) continue;
+
+      const topWalletShare =
+        candidate.totalVolumeUsd > 0 ? candidate.maxWalletVolumeUsd / candidate.totalVolumeUsd : 0;
+      await this.repository.insertWalletAnomaly({
+        marketId: candidate.marketId,
+        anomalyType,
+        severityScore: Math.min(
+          100,
+          50 +
+            candidate.walletAddresses.length * 5 +
+            Math.log10(candidate.totalVolumeUsd + 1) * 8 +
+            topWalletShare * 12
+        ),
+        confidenceScore: Math.min(92, 58 + candidate.tradeCount * 2 + topWalletShare * 20),
+        walletAddresses: candidate.walletAddresses.slice(0, 20),
+        summary: `${labels[candidate.signalKind]} on ${candidate.marketTitle}.`,
+        metadata: {
+          signal_kind: candidate.signalKind,
+          side: candidate.side,
+          outcome: candidate.outcome,
+          total_volume_usd: candidate.totalVolumeUsd,
+          max_wallet_volume_usd: candidate.maxWalletVolumeUsd,
+          top_wallet_share: topWalletShare,
+          trade_count: candidate.tradeCount,
+          wallet_count: candidate.walletAddresses.length,
+          related_wallet_addresses: candidate.walletAddresses,
+          started_at: candidate.startedAt.toISOString(),
+          ended_at: candidate.endedAt.toISOString()
+        },
+        detectedAt: candidate.endedAt
+      });
+      logger.info("wallet_intelligence.smart_flow_detected", {
+        signalKind: candidate.signalKind,
+        anomalyType,
+        marketId: candidate.marketId,
+        walletCount: candidate.walletAddresses.length,
+        totalVolumeUsd: candidate.totalVolumeUsd
       });
     }
   }

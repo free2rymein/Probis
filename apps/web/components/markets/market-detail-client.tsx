@@ -6,6 +6,7 @@ import { ArrowLeft, RefreshCw } from "lucide-react";
 import type {
   MarketProbabilityPoint,
   MarketRecentTrade,
+  MarketTimelineItem,
   MarketVolumePoint,
   MarketWalletFlow
 } from "@probis/types";
@@ -27,6 +28,7 @@ import {
 } from "@probis/ui";
 import { formatCompactNumber, formatUsd } from "@probis/shared";
 import { useMarketDetail } from "@/lib/api/hooks";
+import { shortWalletAddress, walletAlias } from "@/lib/wallet-display";
 
 type ChartPoint = MarketProbabilityPoint | MarketVolumePoint;
 type TimeRange = "1H" | "6H" | "24H";
@@ -46,8 +48,6 @@ const formatPercent = (value: number | null) => {
     maximumFractionDigits: 1
   }).format(value);
 };
-
-const shortWallet = (wallet: string) => `${wallet.slice(0, 6)}...${wallet.slice(-4)}`;
 
 const formatAxisTime = (value: string) =>
   new Intl.DateTimeFormat("en-US", {
@@ -450,6 +450,13 @@ const getTradeBiasSummary = (trades: MarketRecentTrade[]) => {
   };
 };
 
+const timelineTypeLabel: Record<MarketTimelineItem["eventType"], string> = {
+  probability_move: "Probability move",
+  volume_spike: "Volume spike",
+  large_trade: "Large trade",
+  wallet_flow_anomaly: "Wallet-flow anomaly"
+};
+
 export function MarketDetailClient({ marketId }: { marketId: string }) {
   const detail = useMarketDetail(marketId);
   const [timeRange, setTimeRange] = useState<TimeRange>("6H");
@@ -459,6 +466,8 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
   const volumeHistory = data?.volumeHistory ?? [];
   const recentTrades = data?.recentTrades ?? [];
   const walletFlows = data?.walletFlows ?? [];
+  const timeline = data?.timeline ?? [];
+  const replaySummary = data?.replaySummary;
   const rangedProbabilityHistory = useMemo(
     () => getFilteredPoints(probabilityHistory, timeRange),
     [probabilityHistory, timeRange]
@@ -635,6 +644,102 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
         </Card>
       </div>
 
+      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.4fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle>What Happened Recently?</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <div className="border-border rounded-md border p-3">
+              <div className="text-muted-foreground text-xs">Replay state</div>
+              <div className="mt-1 font-medium capitalize">
+                {replaySummary?.headline ?? "No replay summary yet."}
+              </div>
+            </div>
+            <div className="border-border rounded-md border p-3">
+              <div className="text-muted-foreground text-xs">First observable change</div>
+              <p className="mt-1 text-sm">
+                {replaySummary?.sequence ?? "Not enough market events to summarize."}
+              </p>
+            </div>
+            <div className="border-border rounded-md border p-3">
+              <div className="text-muted-foreground text-xs">Wallet-flow timing</div>
+              <p className="mt-1 text-sm">
+                {replaySummary?.walletFlowTiming ??
+                  "Wallet flow and probability movement have not overlapped clearly yet."}
+              </p>
+            </div>
+            <Badge variant={replaySummary?.activityState === "unusual" ? "warning" : "outline"}>
+              {replaySummary?.activityState ?? "quiet"}
+            </Badge>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Market Timeline / Replay</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {timeline.length ? (
+              timeline.map((item) => (
+                <div key={item.id} className="border-border rounded-md border p-3 text-sm">
+                  <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge
+                          variant={
+                            item.severity === "high impact"
+                              ? "danger"
+                              : item.severity === "meaningful"
+                                ? "warning"
+                                : "outline"
+                          }
+                        >
+                          {item.severity}
+                        </Badge>
+                        <Badge variant="outline">{timelineTypeLabel[item.eventType]}</Badge>
+                        {item.direction ? <Badge variant="outline">{item.direction}</Badge> : null}
+                        <span className="text-muted-foreground font-mono text-xs">
+                          {new Date(item.timestamp).toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="text-muted-foreground mt-2">{item.explanation}</p>
+                      {item.walletAddress ? (
+                        <Link
+                          href={`/wallets/${item.walletAddress}`}
+                          className="mt-2 inline-block text-sm font-medium hover:underline"
+                          title={item.walletAddress}
+                        >
+                          {walletAlias(item.walletAddress, item.walletArchetype)}
+                          <span className="text-muted-foreground ml-2 font-mono text-xs">
+                            {shortWalletAddress(item.walletAddress)}
+                          </span>
+                        </Link>
+                      ) : null}
+                    </div>
+                    <div className="grid min-w-40 grid-cols-2 gap-2 font-mono text-xs">
+                      <div className="border-border rounded border p-2">
+                        <div className="text-muted-foreground">Impact</div>
+                        <div>{item.marketImpact ?? "n/a"}</div>
+                      </div>
+                      <div className="border-border rounded border p-2">
+                        <div className="text-muted-foreground">Confidence</div>
+                        <div>{item.confidence === null ? "n/a" : item.confidence.toFixed(0)}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <EmptyState
+                title="No replay events yet"
+                description="Probability moves, volume spikes, large trades, and smart-flow events will appear here as ingestion accumulates data."
+              />
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
         <Card>
           <CardHeader>
@@ -656,8 +761,17 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
                 <TableBody>
                   {recentTrades.map((trade) => (
                     <TableRow key={trade.id}>
-                      <TableCell className="font-mono">
-                        {shortWallet(trade.walletAddress)}
+                      <TableCell>
+                        <Link
+                          href={`/wallets/${trade.walletAddress}`}
+                          title={trade.walletAddress}
+                          className="font-medium hover:underline"
+                        >
+                          {walletAlias(trade.walletAddress, trade.walletArchetype)}
+                        </Link>
+                        <div className="text-muted-foreground font-mono text-xs">
+                          {shortWalletAddress(trade.walletAddress)}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge variant={trade.side === "buy" ? "success" : "warning"}>
@@ -726,8 +840,15 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <div className="font-mono">{shortWallet(wallet.walletAddress)}</div>
+                        <Link
+                          href={`/wallets/${wallet.walletAddress}`}
+                          title={wallet.walletAddress}
+                          className="font-medium hover:underline"
+                        >
+                          {walletAlias(wallet.walletAddress, wallet.walletArchetype)}
+                        </Link>
                         <div className="text-muted-foreground text-xs">
+                          {shortWalletAddress(wallet.walletAddress)} ·{" "}
                           {formatCompactNumber(wallet.tradeCount)} trades
                         </div>
                       </div>

@@ -11,14 +11,40 @@ export type WalletProfileInput = {
   anomalyTriggerCount: number;
   highSignalMarketCount: number;
   marketConcentration: number;
+  yesBuyVolumeUsd: number;
+  noBuyVolumeUsd: number;
+  buyVolumeUsd: number;
+  sellVolumeUsd: number;
+  recent24hVolumeUsd: number;
+  recent24hTradeCount: number;
+  avgEntryPrice: number;
+  avgExitPrice: number;
+  profitableMarketProxyCount: number;
+  resolvedMarketCount: number;
+  specializationTags: string[];
+  coordinatedFlowParticipation: boolean;
 };
 
 export type WalletScores = {
   smartMoneyScore: number;
   convictionScore: number;
   influenceScore: number;
+  archetype: WalletArchetype;
   metadata: Record<string, unknown>;
 };
+
+export type WalletArchetype =
+  | "whale"
+  | "sniper"
+  | "momentum_trader"
+  | "high_frequency_scalper"
+  | "concentrated_conviction_buyer"
+  | "broad_diversified_trader"
+  | "emerging_wallet"
+  | "inactive_wallet"
+  | "low_activity_wallet"
+  | "directional_buyer"
+  | "directional_seller";
 
 export type WalletMarketInput = {
   walletAddress: string;
@@ -45,4 +71,22 @@ export type CoordinatedActivityCandidate = {
   totalVolumeUsd: number;
   startedAt: Date;
   endedAt: Date;
+};
+
+export type SmartFlowCandidate = {
+  marketId: string;
+  marketTitle: string;
+  walletAddresses: string[];
+  side: "buy" | "sell";
+  outcome: string | null;
+  tradeCount: number;
+  totalVolumeUsd: number;
+  maxWalletVolumeUsd: number;
+  startedAt: Date;
+  endedAt: Date;
+  signalKind:
+    | "large_concentrated_yes_buying"
+    | "high_conviction_accumulation"
+    | "unusual_wallet_activity"
+    | "synchronized_directional_flow";
 };

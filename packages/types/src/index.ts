@@ -138,6 +138,7 @@ export type MarketVolumePoint = {
 export type MarketRecentTrade = {
   id: string;
   walletAddress: string;
+  walletArchetype: WalletArchetype | null;
   side: "buy" | "sell";
   price: number;
   quantity: number;
@@ -148,11 +149,32 @@ export type MarketRecentTrade = {
 
 export type MarketWalletFlow = {
   walletAddress: string;
+  walletArchetype: WalletArchetype | null;
   buyVolumeUsd: number;
   sellVolumeUsd: number;
   netFlowUsd: number;
   tradeCount: number;
   lastTradeAt: string;
+};
+
+export type MarketTimelineItem = {
+  id: string;
+  timestamp: string;
+  eventType: "probability_move" | "volume_spike" | "large_trade" | "wallet_flow_anomaly";
+  direction: string | null;
+  walletAddress: string | null;
+  walletArchetype: WalletArchetype | null;
+  marketImpact: string | null;
+  explanation: string;
+  severity: "watchlist" | "meaningful" | "high impact";
+  confidence: number | null;
+};
+
+export type MarketReplaySummary = {
+  headline: string;
+  sequence: string;
+  walletFlowTiming: string;
+  activityState: "quiet" | "elevated" | "concentrated" | "unusual";
 };
 
 export type MarketDetail = {
@@ -166,6 +188,8 @@ export type MarketDetail = {
   volumeHistory: MarketVolumePoint[];
   recentTrades: MarketRecentTrade[];
   walletFlows: MarketWalletFlow[];
+  timeline: MarketTimelineItem[];
+  replaySummary: MarketReplaySummary;
 };
 
 export type TimelineListItem = {
@@ -200,10 +224,50 @@ export type WalletIntelligenceSummary = {
   metadata: Record<string, unknown>;
 };
 
+export type WalletArchetype =
+  | "whale"
+  | "sniper"
+  | "momentum_trader"
+  | "high_frequency_scalper"
+  | "concentrated_conviction_buyer"
+  | "broad_diversified_trader"
+  | "emerging_wallet"
+  | "inactive_wallet"
+  | "low_activity_wallet"
+  | "directional_buyer"
+  | "directional_seller";
+
+export type WalletIntelligenceMetrics = {
+  archetype: WalletArchetype | null;
+  archetypeConfidence: "low confidence" | "medium confidence" | "high confidence" | null;
+  archetypeReason: string | null;
+  directionalBias: number | null;
+  directionalBiasLabel: string | null;
+  concentrationScore: number | null;
+  marketConcentration: number | null;
+  recentActivityScore: number | null;
+  recent24hVolumeUsd: number | null;
+  recent24hTradeCount: number | null;
+  averageTradeUsd: number | null;
+  maxTradeUsd: number | null;
+  largeTradeCount: number | null;
+  yesBuyVolumeUsd: number | null;
+  noBuyVolumeUsd: number | null;
+  buyVolumeUsd: number | null;
+  sellVolumeUsd: number | null;
+  avgEntryPrice: number | null;
+  avgExitPrice: number | null;
+  proxyRealizedPnlUsd: number | null;
+  proxyWinRate: number | null;
+  specializationTags: Array<"crypto" | "geopolitics" | "macro" | "politics" | "tech_ai">;
+  coordinatedFlowParticipation: boolean;
+};
+
 export type WalletMarketActivity = {
   walletAddress: string;
   marketId: string;
   marketTitle: string;
+  marketCategory: string | null;
   totalVolumeUsd: number;
   tradeCount: number;
   netPositionEstimate: number;
@@ -219,6 +283,18 @@ export type WalletDailyStat = {
   anomalyCount: number;
 };
 
+export type WalletRecentTrade = {
+  id: string;
+  marketId: string;
+  marketTitle: string;
+  side: "buy" | "sell";
+  outcome: string | null;
+  price: number;
+  quantity: number;
+  usdValue: number;
+  tradeTimestamp: string;
+};
+
 export type WalletActivityPoint = {
   walletAddress: string;
   totalVolumeUsd: number;
@@ -229,7 +305,9 @@ export type WalletActivityPoint = {
 
 export type WalletDetail = {
   profile: WalletIntelligenceSummary;
+  metrics: WalletIntelligenceMetrics;
   recentMarkets: WalletMarketActivity[];
+  recentTrades: WalletRecentTrade[];
   recentAnomalies: AnomalySignal[];
   dailyStats: WalletDailyStat[];
 };
