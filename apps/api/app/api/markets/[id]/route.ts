@@ -1,4 +1,12 @@
-import type { MarketDetail, MarketTimelineItem, WalletArchetype } from "@probis/types";
+import type {
+  MarketDetail,
+  MarketNarrativeSummary,
+  MarketTimelineItem,
+  NarrativeStrength,
+  NarrativeTheme,
+  RelatedMarketNarrative,
+  WalletArchetype
+} from "@probis/types";
 import { getSql } from "@/lib/db";
 import { withApiHandler } from "@/lib/handler";
 import { corsHeaders, fail, ok } from "@/lib/responses";
@@ -37,6 +45,15 @@ type MarketRow = {
   latest_aggregate_bucket: Date | null;
   resolution_date: Date | null;
   updated_at: Date;
+};
+
+type RelatedMarketRow = {
+  id: string;
+  title: string;
+  category: string;
+  recent_signal_count: string;
+  recent_volume: string | null;
+  shared_wallet_count: string;
 };
 
 const archetypes = new Set<WalletArchetype>([
@@ -91,6 +108,209 @@ const formatNumber = (value: number) =>
     notation: "compact",
     maximumFractionDigits: 1
   }).format(value);
+
+const THEME_KEYWORDS: Array<{
+  theme: NarrativeTheme;
+  label: string;
+  keywords: string[];
+}> = [
+  {
+    theme: "election_uncertainty",
+    label: "Election uncertainty",
+    keywords: [
+      "election",
+      "president",
+      "senate",
+      "congress",
+      "poll",
+      "vote",
+      "primary",
+      "trump",
+      "biden",
+      "vance"
+    ]
+  },
+  {
+    theme: "monetary_policy",
+    label: "Monetary policy",
+    keywords: ["fed", "fomc", "rate cut", "interest rate", "cpi", "inflation", "treasury"]
+  },
+  {
+    theme: "geopolitical_escalation",
+    label: "Geopolitical escalation",
+    keywords: ["china", "taiwan", "iran", "israel", "gaza", "ukraine", "russia", "nato", "sanction"]
+  },
+  {
+    theme: "ai_regulation",
+    label: "AI regulation",
+    keywords: [
+      "ai",
+      "artificial intelligence",
+      "openai",
+      "anthropic",
+      "nvidia",
+      "chip",
+      "semiconductor",
+      "regulation",
+      "antitrust"
+    ]
+  },
+  {
+    theme: "crypto_etf_optimism",
+    label: "Crypto ETF optimism",
+    keywords: ["bitcoin", "ethereum", "crypto", "etf", "sec"]
+  },
+  {
+    theme: "recession_fears",
+    label: "Recession fears",
+    keywords: ["recession", "gdp", "unemployment", "jobs", "payroll"]
+  },
+  {
+    theme: "energy_shock",
+    label: "Energy shock",
+    keywords: ["oil", "gas", "energy", "opec", "brent", "wti"]
+  },
+  {
+    theme: "conflict_escalation",
+    label: "Conflict escalation",
+    keywords: ["war", "ceasefire", "missile", "invasion", "attack", "conflict"]
+  },
+  {
+    theme: "trade_war_risk",
+    label: "Trade war risk",
+    keywords: ["tariff", "trade war", "export control", "import", "trade deal"]
+  },
+  {
+    theme: "liquidity_stress",
+    label: "Liquidity stress",
+    keywords: ["liquidity", "bank", "credit", "default", "debt", "treasury"]
+  }
+];
+
+const themeLabel = (theme: NarrativeTheme) =>
+  THEME_KEYWORDS.find((candidate) => candidate.theme === theme)?.label ??
+  theme.replaceAll("_", " ");
+
+const inferNarrativeThemes = (...parts: Array<string | null | undefined>) => {
+  const haystack = parts.filter(Boolean).join(" ").toLowerCase();
+  const matched = THEME_KEYWORDS.filter(({ keywords }) =>
+    keywords.some((keyword) => haystack.includes(keyword))
+  ).map(({ theme }) => theme);
+
+  if (matched.length > 0) return Array.from(new Set(matched));
+  return ["geopolitical_escalation"] satisfies NarrativeTheme[];
+};
+
+const narrativeStrength = (score: number): NarrativeStrength => {
+  if (score >= 80) return "dominant";
+  if (score >= 55) return "active";
+  if (score >= 30) return "emerging";
+  return "weak";
+};
+
+const buildMarketNarrative = ({
+  market,
+  probabilityHistory,
+  volumeHistory,
+  timeline,
+  walletRows,
+  anomalyRows,
+  relatedMarkets
+}: {
+  market: MarketRow;
+  probabilityHistory: Array<{ bucket: string; yesProbability: number }>;
+  volumeHistory: Array<{ bucket: string; volume: number; tradeCount: number }>;
+  timeline: MarketTimelineItem[];
+  walletRows: Array<{ wallet_metadata: Record<string, unknown> | null }>;
+  anomalyRows: Array<{
+    anomaly_type: string;
+    severity_score: string;
+    metadata: Record<string, unknown>;
+  }>;
+  relatedMarkets: RelatedMarketNarrative[];
+}): MarketNarrativeSummary => {
+  const themes = inferNarrativeThemes(market.category, market.title, market.description);
+  const primaryTheme = themes[0] ?? "geopolitical_escalation";
+  const firstProbability = probabilityHistory[0]?.yesProbability;
+  const latestProbability = probabilityHistory.at(-1)?.yesProbability;
+  const probabilityMove =
+    firstProbability === undefined || latestProbability === undefined
+      ? 0
+      : Math.abs(latestProbability - firstProbability);
+  const averageVolume =
+    volumeHistory.reduce((sum, point) => sum + point.volume, 0) / Math.max(1, volumeHistory.length);
+  const latestVolume = volumeHistory.at(-1)?.volume ?? 0;
+  const volumeRatio = averageVolume > 0 ? latestVolume / averageVolume : 0;
+  const walletSpecializations = walletRows.flatMap((row) => {
+    const value = row.wallet_metadata?.specialization_tags;
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
+  });
+  const alignedWalletCount = walletSpecializations.filter((tag) => {
+    if (primaryTheme === "crypto_etf_optimism") return tag === "crypto";
+    if (primaryTheme === "monetary_policy" || primaryTheme === "recession_fears")
+      return tag === "macro";
+    if (primaryTheme === "ai_regulation") return tag === "tech_ai";
+    if (primaryTheme === "election_uncertainty") return tag === "politics";
+    return tag === "geopolitics";
+  }).length;
+  const highImpactEvents = timeline.filter((item) => item.severity === "high impact").length;
+  const coordinatedSignals = anomalyRows.filter(
+    (row) =>
+      row.anomaly_type === "coordinated_wallet_activity" ||
+      row.metadata.signal_kind === "synchronized_directional_flow"
+  ).length;
+  const strengthScore = Math.min(
+    100,
+    anomalyRows.length * 9 +
+      relatedMarkets.length * 10 +
+      alignedWalletCount * 5 +
+      highImpactEvents * 10 +
+      coordinatedSignals * 12 +
+      Math.min(18, probabilityMove * 120) +
+      Math.min(16, volumeRatio * 5)
+  );
+  const strength = narrativeStrength(strengthScore);
+  const attentionState =
+    volumeRatio >= 1.75 || anomalyRows.length >= 3
+      ? "suggests elevated attention"
+      : timeline.length >= 3
+        ? "suggests attention is building"
+        : "does not yet show a clear attention shift";
+  const driverParts = [
+    probabilityMove >= 0.03
+      ? `YES probability moved ${(probabilityMove * 100).toFixed(1)} points across available history.`
+      : null,
+    volumeRatio >= 1.5 ? `Latest volume is ${volumeRatio.toFixed(1)}x the recent baseline.` : null,
+    coordinatedSignals > 0
+      ? "Synchronized wallet-flow signals appear correlated with the theme."
+      : null,
+    alignedWalletCount > 0
+      ? `${alignedWalletCount} recent wallet-flow entries came from wallets with relevant specialization tags.`
+      : null,
+    relatedMarkets.length > 0
+      ? "Related markets show overlapping category or theme activity."
+      : null
+  ].filter((item): item is string => Boolean(item));
+
+  return {
+    primaryTheme,
+    strength,
+    headline: `${themeLabel(primaryTheme)} narrative ${strength}.`,
+    narrativeContext: `${themeLabel(
+      primaryTheme
+    )} appears correlated with recent prediction-market activity in this market. This is contextual interpretation from internal flow, timeline, and signal data, not a causal claim.`,
+    potentialDrivers:
+      driverParts.length > 0
+        ? driverParts
+        : ["Internal market activity is still too sparse to isolate a clear potential driver."],
+    relatedThemes: themes.slice(1, 5),
+    attentionShift: `Recent market behavior ${attentionState}; interpret this as correlation rather than confirmed causality.`,
+    relatedMarkets,
+    confidence: Math.round(strengthScore)
+  };
+};
 
 const buildReplaySummary = (timeline: MarketTimelineItem[]): MarketDetail["replaySummary"] => {
   if (timeline.length === 0) {
@@ -308,6 +528,39 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
     `
   ]);
 
+  const sharedWalletAddresses = Array.from(
+    new Set(anomalyRows.flatMap((row) => row.wallet_addresses ?? []))
+  );
+  const relatedThemes = inferNarrativeThemes(market.category, market.title, market.description);
+  const primaryRelatedTheme = relatedThemes[0] ?? "geopolitical_escalation";
+  const relatedMarketRows = await sql<RelatedMarketRow[]>`
+    SELECT
+      m.id,
+      m.title,
+      m.category,
+      COUNT(DISTINCT ae.id)::text AS recent_signal_count,
+      COALESCE(m.volume_24h, NULLIF(m.metadata->>'gamma_volume', '')::numeric)::text AS recent_volume,
+      COUNT(DISTINCT shared_wallets.wallet_address)::text AS shared_wallet_count
+    FROM markets m
+    LEFT JOIN anomaly_events ae
+      ON ae.market_id = m.id
+      AND ae.detected_at >= now() - interval '24 hours'
+    LEFT JOIN LATERAL (
+      SELECT unnest(ae.wallet_addresses) AS wallet_address
+    ) shared_wallets ON shared_wallets.wallet_address = ANY(${sharedWalletAddresses}::text[])
+    WHERE m.id <> ${id}
+      AND m.is_active_universe = true
+      AND (
+        lower(m.category) = lower(${market.category})
+        OR lower(m.title) LIKE ${`%${primaryRelatedTheme.split("_")[0]}%`}
+      )
+    GROUP BY m.id, m.title, m.category, m.volume_24h, m.metadata
+    ORDER BY COUNT(DISTINCT ae.id) DESC,
+      COUNT(DISTINCT shared_wallets.wallet_address) DESC,
+      COALESCE(m.volume_24h, NULLIF(m.metadata->>'gamma_volume', '')::numeric, 0) DESC
+    LIMIT 5
+  `;
+
   const probabilityHistory = probabilityRows.reverse().map((row) => ({
     bucket: row.bucket.toISOString(),
     yesProbability: Number(row.yes_probability)
@@ -404,6 +657,31 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
     .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
     .slice(0, 40);
   const replaySummary = buildReplaySummary(timeline);
+  const relatedMarkets = relatedMarketRows.map(
+    (row): RelatedMarketNarrative => ({
+      marketId: row.id,
+      title: row.title,
+      category: row.category,
+      sharedTheme: primaryRelatedTheme,
+      activityScore:
+        Number(row.recent_signal_count) * 12 +
+        Number(row.shared_wallet_count) * 18 +
+        Math.min(25, Math.log10(Number(row.recent_volume ?? 0) + 1) * 4),
+      explanation:
+        Number(row.shared_wallet_count) > 0
+          ? "Shared wallet participation and related market activity appear close to this theme."
+          : "Category or theme overlap suggests nearby market attention."
+    })
+  );
+  const narrative = buildMarketNarrative({
+    market,
+    probabilityHistory,
+    volumeHistory,
+    timeline,
+    walletRows,
+    anomalyRows,
+    relatedMarkets
+  });
 
   const data: MarketDetail = {
     market: {
@@ -463,7 +741,8 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
       lastTradeAt: row.last_trade_at.toISOString()
     })),
     timeline,
-    replaySummary
+    replaySummary,
+    narrative
   };
 
   return ok(data, requestId);

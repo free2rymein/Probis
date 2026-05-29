@@ -48,9 +48,12 @@ export const timelineQuerySchema = paginationQuerySchema.extend({
 
 export const signalsQuerySchema = paginationQuerySchema.extend({
   anomalyType: z.string().trim().min(1).max(64).optional(),
+  confidence: z.enum(["low", "medium", "high", "critical"]).optional(),
+  lifecycle: z.enum(["emerging", "active", "fading", "resolved"]).optional(),
+  marketId: z.string().uuid().optional(),
   minSeverity: z.coerce.number().min(0).max(100).optional(),
   lookbackHours: z.coerce.number().int().min(1).max(720).default(168),
-  sort: z.enum(["severity_score", "detected_at"]).default("severity_score"),
+  sort: z.enum(["priority", "severity_score", "detected_at"]).default("priority"),
   direction: z.enum(["asc", "desc"]).default("desc")
 });
 

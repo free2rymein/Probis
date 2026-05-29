@@ -177,6 +177,41 @@ export type MarketReplaySummary = {
   activityState: "quiet" | "elevated" | "concentrated" | "unusual";
 };
 
+export type NarrativeTheme =
+  | "election_uncertainty"
+  | "monetary_policy"
+  | "geopolitical_escalation"
+  | "ai_regulation"
+  | "crypto_etf_optimism"
+  | "recession_fears"
+  | "energy_shock"
+  | "conflict_escalation"
+  | "trade_war_risk"
+  | "liquidity_stress";
+
+export type NarrativeStrength = "weak" | "emerging" | "active" | "dominant";
+
+export type RelatedMarketNarrative = {
+  marketId: string;
+  title: string;
+  category: string;
+  sharedTheme: NarrativeTheme;
+  activityScore: number;
+  explanation: string;
+};
+
+export type MarketNarrativeSummary = {
+  primaryTheme: NarrativeTheme;
+  strength: NarrativeStrength;
+  headline: string;
+  narrativeContext: string;
+  potentialDrivers: string[];
+  relatedThemes: NarrativeTheme[];
+  attentionShift: string;
+  relatedMarkets: RelatedMarketNarrative[];
+  confidence: number;
+};
+
 export type MarketDetail = {
   market: MarketListItem & {
     description: string | null;
@@ -190,6 +225,7 @@ export type MarketDetail = {
   walletFlows: MarketWalletFlow[];
   timeline: MarketTimelineItem[];
   replaySummary: MarketReplaySummary;
+  narrative: MarketNarrativeSummary;
 };
 
 export type TimelineListItem = {
@@ -352,6 +388,17 @@ export type AnomalySignal = {
   metadata: Record<string, unknown>;
   detectedAt: string;
   createdAt: string;
+  qualityConfidence?: "low" | "medium" | "high" | "critical";
+  priorityScore?: number;
+  lifecycle?: "emerging" | "active" | "fading" | "resolved";
+  compositeType?: string | null;
+  explanation?: string;
+  contributors?: string[];
+  relatedSignalCount?: number;
+  isSuppressed?: boolean;
+  narrativeTheme?: NarrativeTheme;
+  narrativeStrength?: NarrativeStrength;
+  relatedMarketContext?: string | null;
 };
 
 export type TimelineEvent = {

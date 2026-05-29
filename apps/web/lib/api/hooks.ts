@@ -29,9 +29,12 @@ export type SignalsQuery = {
   limit: number;
   offset: number;
   anomalyType?: string;
+  confidence?: "low" | "medium" | "high" | "critical";
+  lifecycle?: "emerging" | "active" | "fading" | "resolved";
+  marketId?: string;
   minSeverity?: number;
   lookbackHours?: number;
-  sort?: "severity_score" | "detected_at";
+  sort?: "priority" | "severity_score" | "detected_at";
   direction?: "asc" | "desc";
 };
 

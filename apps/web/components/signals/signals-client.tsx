@@ -1,23 +1,21 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
-import { AlertCircle, ArrowDown, ArrowUp, RefreshCw } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowUp, RefreshCw, SignalHigh } from "lucide-react";
 import type { AnomalySignal, Severity } from "@probis/types";
 import {
   Badge,
   Button,
+  Card,
+  CardContent,
   EmptyState,
   SeverityIndicator,
-  Skeleton,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow
+  Skeleton
 } from "@probis/ui";
 import { formatCompactNumber } from "@probis/shared";
 import { useSignals, type SignalsQuery } from "@/lib/api/hooks";
+import { shortWalletAddress, walletAlias } from "@/lib/wallet-display";
 
 const severityFromScore = (score: number): Severity => {
   if (score >= 90) return "critical";
@@ -27,50 +25,153 @@ const severityFromScore = (score: number): Severity => {
   return "neutral";
 };
 
-const formatType = (type: string) => type.replaceAll("_", " ");
+const formatType = (type: string | null | undefined) =>
+  (type ?? "signal").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 
-const metadataPreview = (metadata: Record<string, unknown>) => {
-  const entries = Object.entries(metadata).slice(0, 3);
-  if (entries.length === 0) return "none";
-
-  return entries
-    .map(([key, value]) => {
-      const displayValue =
-        typeof value === "number" ? Number(value.toFixed(4)).toString() : String(value);
-      return `${key}: ${displayValue}`;
-    })
-    .join(" | ");
+const confidenceVariant = (confidence: AnomalySignal["qualityConfidence"]) => {
+  if (confidence === "critical") return "danger";
+  if (confidence === "high") return "success";
+  if (confidence === "medium") return "warning";
+  return "outline";
 };
 
-function SignalRow({ signal }: { signal: AnomalySignal }) {
+const lifecycleVariant = (lifecycle: AnomalySignal["lifecycle"]) => {
+  if (lifecycle === "active") return "success";
+  if (lifecycle === "emerging") return "warning";
+  if (lifecycle === "fading") return "outline";
+  return "default";
+};
+
+const narrativeVariant = (strength: AnomalySignal["narrativeStrength"]) => {
+  if (strength === "dominant") return "danger";
+  if (strength === "active") return "success";
+  if (strength === "emerging") return "warning";
+  return "outline";
+};
+
+const ageLabel = (timestamp: string) => {
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(timestamp).getTime()) / 60_000));
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+};
+
+function SignalCard({ signal }: { signal: AnomalySignal }) {
+  const composite = signal.compositeType ?? signal.anomalyType;
+  const priority = signal.priorityScore ?? signal.severityScore;
+  const confidence = signal.qualityConfidence ?? "low";
+  const lifecycle = signal.lifecycle ?? "active";
+  const wallets = signal.walletAddresses.slice(0, 3);
+
   return (
-    <TableRow>
-      <TableCell className="min-w-52">
-        <div className="flex items-center gap-2">
-          <SeverityIndicator severity={severityFromScore(signal.severityScore)} />
-          <Badge variant="outline">{formatType(signal.anomalyType)}</Badge>
+    <Card>
+      <CardContent className="space-y-3 p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <SeverityIndicator severity={severityFromScore(priority)} />
+              <Badge variant={confidenceVariant(confidence)}>{confidence} confidence</Badge>
+              <Badge variant={lifecycleVariant(lifecycle)}>{lifecycle}</Badge>
+              {signal.narrativeTheme ? (
+                <Badge variant={narrativeVariant(signal.narrativeStrength)}>
+                  {formatType(signal.narrativeTheme)}
+                </Badge>
+              ) : null}
+              <Badge variant="outline">{formatType(composite)}</Badge>
+              {(signal.relatedSignalCount ?? 0) > 1 ? (
+                <Badge variant="outline">{signal.relatedSignalCount} grouped</Badge>
+              ) : null}
+            </div>
+            <Link
+              href={`/markets/${signal.marketId}`}
+              className="text-foreground line-clamp-2 text-sm font-semibold hover:underline"
+            >
+              {signal.marketTitle}
+            </Link>
+            <p className="text-muted-foreground max-w-4xl text-sm leading-6">
+              {signal.explanation ?? signal.summary}
+            </p>
+            {signal.relatedMarketContext ? (
+              <p className="text-muted-foreground max-w-4xl text-xs leading-5">
+                {signal.relatedMarketContext}
+              </p>
+            ) : null}
+          </div>
+          <div className="grid min-w-40 grid-cols-2 gap-2 text-right text-xs lg:block lg:space-y-2">
+            <div>
+              <div className="text-muted-foreground">Priority</div>
+              <div className="text-foreground font-mono text-lg">{priority.toFixed(0)}</div>
+            </div>
+            <div>
+              <div className="text-muted-foreground">Detected</div>
+              <div className="text-foreground font-mono">{ageLabel(signal.detectedAt)}</div>
+            </div>
+          </div>
         </div>
-      </TableCell>
-      <TableCell className="min-w-80">
-        <div className="text-foreground font-medium">{signal.marketTitle}</div>
-        <div className="text-muted-foreground mt-1 line-clamp-2 text-xs">{signal.summary}</div>
-      </TableCell>
-      <TableCell className="font-mono">{signal.severityScore.toFixed(0)}</TableCell>
-      <TableCell className="font-mono">{signal.confidenceScore.toFixed(0)}</TableCell>
-      <TableCell className="text-muted-foreground max-w-96 truncate font-mono text-xs">
-        {metadataPreview(signal.metadata)}
-      </TableCell>
-      <TableCell className="text-muted-foreground whitespace-nowrap font-mono text-xs">
-        {new Date(signal.detectedAt).toLocaleString()}
-      </TableCell>
-    </TableRow>
+
+        <div className="grid gap-3 lg:grid-cols-[1fr_18rem]">
+          <div className="space-y-2">
+            <div className="text-muted-foreground text-xs uppercase tracking-wide">
+              Why it matters
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(signal.contributors?.length ? signal.contributors : ["single anomaly event"]).map(
+                (contributor) => (
+                  <Badge key={contributor} variant="default" className="normal-case">
+                    {contributor}
+                  </Badge>
+                )
+              )}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="text-muted-foreground text-xs uppercase tracking-wide">
+              Wallets involved
+            </div>
+            {wallets.length ? (
+              <div className="space-y-1">
+                {wallets.map((wallet) => (
+                  <Link
+                    key={wallet}
+                    href={`/wallets/${wallet}`}
+                    title={wallet}
+                    className="text-muted-foreground hover:text-foreground block truncate text-xs hover:underline"
+                  >
+                    {walletAlias(wallet, null)}
+                    <span className="ml-2 font-mono">{shortWalletAddress(wallet)}</span>
+                  </Link>
+                ))}
+                {signal.walletAddresses.length > wallets.length ? (
+                  <div className="text-muted-foreground text-xs">
+                    +{signal.walletAddresses.length - wallets.length} more
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="text-muted-foreground text-xs">Market-level signal</div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
-export function SignalsClient() {
-  const [sort, setSort] = useState<SignalsQuery["sort"]>("severity_score");
+type SignalsClientProps = {
+  initialQuery?: Partial<SignalsQuery>;
+};
+
+export function SignalsClient({ initialQuery }: SignalsClientProps) {
+  const [sort, setSort] = useState<SignalsQuery["sort"]>(initialQuery?.sort ?? "priority");
   const [direction, setDirection] = useState<"asc" | "desc">("desc");
   const [minSeverity, setMinSeverity] = useState("");
+  const [confidence, setConfidence] = useState<SignalsQuery["confidence"] | "">(
+    initialQuery?.confidence ?? ""
+  );
+  const [lifecycle, setLifecycle] = useState<SignalsQuery["lifecycle"] | "">(
+    initialQuery?.lifecycle ?? ""
+  );
   const [offset, setOffset] = useState(0);
   const limit = 25;
 
@@ -80,9 +181,22 @@ export function SignalsClient() {
       offset,
       sort,
       direction,
+      confidence: confidence || undefined,
+      lifecycle: lifecycle || undefined,
+      anomalyType: initialQuery?.anomalyType,
+      marketId: initialQuery?.marketId,
       minSeverity: minSeverity ? Number(minSeverity) : undefined
     }),
-    [direction, minSeverity, offset, sort]
+    [
+      confidence,
+      direction,
+      initialQuery?.anomalyType,
+      initialQuery?.marketId,
+      lifecycle,
+      minSeverity,
+      offset,
+      sort
+    ]
   );
 
   const signals = useSignals(query);
@@ -101,8 +215,37 @@ export function SignalsClient() {
           }}
           className="border-border bg-background focus:ring-ring h-9 rounded-md border px-3 text-sm outline-none focus:ring-2"
         >
-          <option value="severity_score">Severity</option>
+          <option value="priority">Priority</option>
+          <option value="severity_score">Raw severity</option>
           <option value="detected_at">Detected time</option>
+        </select>
+        <select
+          value={confidence}
+          onChange={(event) => {
+            setConfidence(event.target.value as SignalsQuery["confidence"] | "");
+            setOffset(0);
+          }}
+          className="border-border bg-background focus:ring-ring h-9 rounded-md border px-3 text-sm outline-none focus:ring-2"
+        >
+          <option value="">All confidence</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+        <select
+          value={lifecycle}
+          onChange={(event) => {
+            setLifecycle(event.target.value as SignalsQuery["lifecycle"] | "");
+            setOffset(0);
+          }}
+          className="border-border bg-background focus:ring-ring h-9 rounded-md border px-3 text-sm outline-none focus:ring-2"
+        >
+          <option value="">All lifecycle</option>
+          <option value="active">Active</option>
+          <option value="emerging">Emerging</option>
+          <option value="fading">Fading</option>
+          <option value="resolved">Resolved</option>
         </select>
         <select
           value={minSeverity}
@@ -112,10 +255,10 @@ export function SignalsClient() {
           }}
           className="border-border bg-background focus:ring-ring h-9 rounded-md border px-3 text-sm outline-none focus:ring-2"
         >
-          <option value="">All severities</option>
-          <option value="50">50+</option>
-          <option value="75">75+</option>
-          <option value="90">90+</option>
+          <option value="">All curated signals</option>
+          <option value="50">Severity 50+</option>
+          <option value="75">Severity 75+</option>
+          <option value="90">Severity 90+</option>
         </select>
         <Button
           variant="outline"
@@ -149,32 +292,25 @@ export function SignalsClient() {
       ) : signals.isLoading ? (
         <div className="space-y-2">
           <Skeleton className="h-12" />
-          <Skeleton className="h-72" />
+          <Skeleton className="h-40" />
+          <Skeleton className="h-40" />
         </div>
       ) : signals.data?.items.length ? (
-        <div className="border-border bg-background overflow-hidden rounded-lg border">
-          <Table>
-            <TableHeader className="border-border sticky top-0 z-30 border-b bg-[#090d14] [&_th]:bg-[#090d14]">
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="bg-[#090d14]">Signal</TableHead>
-                <TableHead className="bg-[#090d14]">Market</TableHead>
-                <TableHead className="bg-[#090d14]">Severity</TableHead>
-                <TableHead className="bg-[#090d14]">Confidence</TableHead>
-                <TableHead className="bg-[#090d14]">Metadata</TableHead>
-                <TableHead className="bg-[#090d14]">Detected</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {signals.data.items.map((signal) => (
-                <SignalRow key={signal.id} signal={signal} />
-              ))}
-            </TableBody>
-          </Table>
+        <div className="space-y-3">
+          <div className="border-border bg-background/60 flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+            <SignalHigh className="text-primary h-4 w-4" />
+            <span className="text-muted-foreground">
+              Showing deduplicated, confidence-ranked signals. Weak repeated noise is suppressed.
+            </span>
+          </div>
+          {signals.data.items.map((signal) => (
+            <SignalCard key={signal.id} signal={signal} />
+          ))}
         </div>
       ) : (
         <EmptyState
-          title="No signals emitted"
-          description="The intelligence engine is intentionally quiet until aggregate history crosses configured thresholds."
+          title="No curated signals"
+          description="The quality layer is suppressing weak or repetitive anomalies until stronger market evidence appears."
         />
       )}
 
@@ -185,7 +321,7 @@ export function SignalsClient() {
           ) : (
             <AlertCircle className="h-3.5 w-3.5" />
           )}
-          {formatCompactNumber(total)} signals indexed
+          {formatCompactNumber(total)} curated signals
         </div>
         <div className="flex items-center gap-2">
           <Button

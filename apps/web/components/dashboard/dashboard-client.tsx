@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { AlertCircle, BellRing, Clock, Database, Radio, TrendingUp } from "lucide-react";
 import { Badge, Card, CardContent, CardHeader, CardTitle, EmptyState, Skeleton } from "@probis/ui";
 import { formatCompactNumber, formatUsd } from "@probis/shared";
@@ -10,6 +11,9 @@ const healthVariant = {
   stale: "warning",
   idle: "outline"
 } as const;
+
+const linkedMetricClass =
+  "border-border hover:bg-muted/30 flex items-center justify-between rounded-md border p-3 transition-colors";
 
 export function DashboardClient() {
   const dashboard = useDashboardMetrics();
@@ -67,9 +71,10 @@ export function DashboardClient() {
       icon: TrendingUp
     },
     {
-      label: "Signals / 24h",
+      label: "Signal candidates / 24h",
       value: formatCompactNumber(metrics.openSignalsCount),
-      icon: BellRing
+      icon: BellRing,
+      href: "/signals?sort=priority"
     },
     {
       label: "Active whales",
@@ -83,17 +88,27 @@ export function DashboardClient() {
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {cards.map((card) => {
           const Icon = card.icon;
-          return (
-            <Card key={card.label}>
-              <CardContent className="flex items-center justify-between">
-                <div>
-                  <p className="text-muted-foreground text-xs uppercase">{card.label}</p>
-                  <p className="mt-2 text-2xl font-semibold">{card.value}</p>
-                </div>
-                <Icon className="text-muted-foreground h-5 w-5" />
-              </CardContent>
-            </Card>
+          const content = (
+            <CardContent className="flex items-center justify-between">
+              <div>
+                <p className="text-muted-foreground text-xs uppercase">{card.label}</p>
+                <p className="mt-2 text-2xl font-semibold">{card.value}</p>
+              </div>
+              <Icon className="text-muted-foreground h-5 w-5" />
+            </CardContent>
           );
+
+          if ("href" in card) {
+            return (
+              <Link key={card.label} href={card.href} className="block">
+                <Card className="hover:bg-muted/30 cursor-pointer transition-colors">
+                  {content}
+                </Card>
+              </Link>
+            );
+          }
+
+          return <Card key={card.label}>{content}</Card>;
         })}
       </div>
 
@@ -157,12 +172,20 @@ export function DashboardClient() {
                 {metrics.topNarrativeMarkets[0]?.title ?? "none"}
               </span>
             </div>
-            <div className="border-border flex items-center justify-between rounded-md border p-3">
-              <span className="text-muted-foreground">High severity / 24h</span>
+            <Link href="/signals?sort=priority" className={linkedMetricClass}>
+              <span className="text-muted-foreground">Total signals / 24h</span>
+              <span className="font-mono">{formatCompactNumber(metrics.openSignalsCount)}</span>
+            </Link>
+            <Link href="/signals?confidence=high&sort=priority" className={linkedMetricClass}>
+              <span className="text-muted-foreground">High confidence signals</span>
               <span className="font-mono">
                 {formatCompactNumber(metrics.highSeveritySignalsCount)}
               </span>
-            </div>
+            </Link>
+            <Link href="/signals?confidence=critical&sort=priority" className={linkedMetricClass}>
+              <span className="text-muted-foreground">Critical confidence</span>
+              <span className="font-mono">open</span>
+            </Link>
             <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">Top smart wallet</span>
               <span className="font-mono">
@@ -175,18 +198,24 @@ export function DashboardClient() {
               <span className="text-muted-foreground">Top smart score</span>
               <span className="font-mono">{metrics.topSmartMoneyScore?.toFixed(0) ?? "none"}</span>
             </div>
-            <div className="border-border flex items-center justify-between rounded-md border p-3">
+            <Link
+              href="/signals?anomalyType=whale_activity&sort=priority"
+              className={linkedMetricClass}
+            >
               <span className="text-muted-foreground">Whale alerts / 24h</span>
               <span className="font-mono">
                 {formatCompactNumber(metrics.recentWhaleAlertsCount)}
               </span>
-            </div>
-            <div className="border-border flex items-center justify-between rounded-md border p-3">
+            </Link>
+            <Link
+              href="/signals?anomalyType=coordinated_wallet_activity&lifecycle=active&sort=priority"
+              className={linkedMetricClass}
+            >
               <span className="text-muted-foreground">Coordinated / 24h</span>
               <span className="font-mono">
                 {formatCompactNumber(metrics.coordinatedActivityCount)}
               </span>
-            </div>
+            </Link>
             <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">Trades / 5m</span>
               <span className="font-mono">
@@ -210,10 +239,10 @@ export function DashboardClient() {
               <span className="text-muted-foreground">Latest market update</span>
               <span className="font-mono">{latestMarketUpdate}</span>
             </div>
-            <div className="border-border flex items-center justify-between rounded-md border p-3">
+            <Link href="/signals?lifecycle=active&sort=priority" className={linkedMetricClass}>
               <span className="text-muted-foreground">Latest anomaly</span>
               <span className="font-mono">{latestAnomaly}</span>
-            </div>
+            </Link>
             <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">Timeline / 1h</span>
               <span className="font-mono">

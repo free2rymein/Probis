@@ -457,6 +457,16 @@ const timelineTypeLabel: Record<MarketTimelineItem["eventType"], string> = {
   wallet_flow_anomaly: "Wallet-flow anomaly"
 };
 
+const formatNarrativeLabel = (value: string) =>
+  value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const narrativeStrengthVariant = (strength: string | undefined) => {
+  if (strength === "dominant") return "danger";
+  if (strength === "active") return "success";
+  if (strength === "emerging") return "warning";
+  return "outline";
+};
+
 export function MarketDetailClient({ marketId }: { marketId: string }) {
   const detail = useMarketDetail(marketId);
   const [timeRange, setTimeRange] = useState<TimeRange>("6H");
@@ -468,6 +478,7 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
   const walletFlows = data?.walletFlows ?? [];
   const timeline = data?.timeline ?? [];
   const replaySummary = data?.replaySummary;
+  const narrative = data?.narrative;
   const rangedProbabilityHistory = useMemo(
     () => getFilteredPoints(probabilityHistory, timeRange),
     [probabilityHistory, timeRange]
@@ -598,6 +609,88 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
           tone={tradeBiasSummary.tone}
         />
       </div>
+
+      {narrative ? (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
+            <CardTitle>Narrative Context</CardTitle>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Badge variant={narrativeStrengthVariant(narrative.strength)}>
+                {narrative.strength}
+              </Badge>
+              <Badge variant="outline">{formatNarrativeLabel(narrative.primaryTheme)}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <div className="text-foreground text-sm font-semibold">{narrative.headline}</div>
+              <p className="text-muted-foreground mt-2 max-w-5xl text-sm leading-6">
+                {narrative.narrativeContext}
+              </p>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-3">
+              <div className="border-border rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Potential Drivers
+                </div>
+                <div className="mt-2 space-y-2 text-sm">
+                  {narrative.potentialDrivers.map((driver) => (
+                    <p key={driver}>{driver}</p>
+                  ))}
+                </div>
+              </div>
+              <div className="border-border rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Attention Shift
+                </div>
+                <p className="mt-2 text-sm leading-6">{narrative.attentionShift}</p>
+                <div className="text-muted-foreground mt-3 font-mono text-xs">
+                  confidence {narrative.confidence}/100
+                </div>
+              </div>
+              <div className="border-border rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Related Themes
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {[narrative.primaryTheme, ...narrative.relatedThemes].map((theme) => (
+                    <Badge key={theme} variant="outline">
+                      {formatNarrativeLabel(theme)}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            </div>
+            {narrative.relatedMarkets.length ? (
+              <div className="space-y-2">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Related Market Correlation
+                </div>
+                <div className="grid gap-2 lg:grid-cols-2">
+                  {narrative.relatedMarkets.map((related) => (
+                    <Link
+                      key={related.marketId}
+                      href={`/markets/${related.marketId}`}
+                      className="border-border hover:bg-muted/30 rounded-md border p-3 transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <Badge variant="outline">{formatNarrativeLabel(related.sharedTheme)}</Badge>
+                        <span className="text-muted-foreground font-mono text-xs">
+                          {related.activityScore.toFixed(0)}
+                        </span>
+                      </div>
+                      <div className="mt-2 line-clamp-2 text-sm font-medium">{related.title}</div>
+                      <p className="text-muted-foreground mt-1 text-xs leading-5">
+                        {related.explanation}
+                      </p>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>
