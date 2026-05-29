@@ -7,9 +7,10 @@ import { formatCompactNumber, formatUsd } from "@probis/shared";
 import { useDashboardMetrics, useTimeline } from "@/lib/api/hooks";
 
 const healthVariant = {
-  healthy: "success",
-  stale: "warning",
-  idle: "outline"
+  running: "success",
+  standby: "outline",
+  degraded: "warning",
+  stale: "warning"
 } as const;
 
 const linkedMetricClass =
@@ -48,6 +49,12 @@ export function DashboardClient() {
   const latestAnomaly = metrics.latestAnomalyTimestamp
     ? new Date(metrics.latestAnomalyTimestamp).toLocaleTimeString()
     : "none";
+  const topCategories = metrics.topCategories ?? [];
+  const tierDistribution = metrics.tierDistribution ?? [];
+  const topRepricingMarkets = metrics.topRepricingMarkets ?? [];
+  const topNarrativeMarkets = metrics.topNarrativeMarkets ?? [];
+  const crossMarketClusters = metrics.crossMarketClusters ?? [];
+  const marketRegimeDistribution = metrics.marketRegimeDistribution ?? [];
 
   const cards = [
     {
@@ -124,6 +131,12 @@ export function DashboardClient() {
                 {metrics.ingestionHealth}
               </Badge>
             </div>
+            <div className="border-border flex items-center justify-between gap-3 rounded-md border p-3">
+              <span className="text-muted-foreground">Worker detail</span>
+              <span className="max-w-64 truncate text-right text-xs">
+                {metrics.workerStatus?.explanation ?? "Worker status unavailable."}
+              </span>
+            </div>
             <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">Open markets</span>
               <span className="font-mono">{formatCompactNumber(metrics.openMarketCount)}</span>
@@ -145,8 +158,8 @@ export function DashboardClient() {
             <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">Top categories</span>
               <span className="max-w-56 truncate font-mono">
-                {metrics.topCategories.length
-                  ? metrics.topCategories
+                {topCategories.length
+                  ? topCategories
                       .map((category) => `${category.category} ${category.count}`)
                       .join(", ")
                   : "none"}
@@ -155,21 +168,21 @@ export function DashboardClient() {
             <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">Tier mix</span>
               <span className="max-w-56 truncate font-mono">
-                {metrics.tierDistribution.length
-                  ? metrics.tierDistribution.map((tier) => `${tier.tier} ${tier.count}`).join(", ")
+                {tierDistribution.length
+                  ? tierDistribution.map((tier) => `${tier.tier} ${tier.count}`).join(", ")
                   : "none"}
               </span>
             </div>
             <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">Top repricing</span>
               <span className="max-w-48 truncate font-mono">
-                {metrics.topRepricingMarkets[0]?.title ?? "none"}
+                {topRepricingMarkets[0]?.title ?? "none"}
               </span>
             </div>
             <div className="border-border flex items-center justify-between rounded-md border p-3">
               <span className="text-muted-foreground">Top narrative</span>
               <span className="max-w-48 truncate font-mono">
-                {metrics.topNarrativeMarkets[0]?.title ?? "none"}
+                {topNarrativeMarkets[0]?.title ?? "none"}
               </span>
             </div>
             <Link href="/signals?sort=priority" className={linkedMetricClass}>
@@ -257,13 +270,13 @@ export function DashboardClient() {
             <CardTitle>Recent Timeline</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {metrics.crossMarketClusters.length ? (
+            {crossMarketClusters.length ? (
               <div className="border-border mb-3 rounded-md border p-3">
                 <div className="text-muted-foreground text-xs uppercase tracking-wide">
                   Thematic Clusters
                 </div>
                 <div className="mt-2 space-y-2">
-                  {metrics.crossMarketClusters.slice(0, 4).map((cluster) => (
+                  {crossMarketClusters.slice(0, 4).map((cluster) => (
                     <Link
                       key={cluster.cluster}
                       href="/signals?sort=priority"
@@ -273,6 +286,25 @@ export function DashboardClient() {
                       <span className="text-muted-foreground font-mono text-xs">
                         {cluster.marketCount} mkts / {cluster.signalCount} sigs
                       </span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {marketRegimeDistribution.length ? (
+              <div className="border-border mb-3 rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Market Regimes
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {marketRegimeDistribution.map((regime) => (
+                    <Link
+                      key={regime.regime}
+                      href="/signals?sort=priority"
+                      className="hover:bg-muted/30 rounded border px-2 py-1 text-xs transition-colors"
+                    >
+                      {regime.regime.replaceAll("_", " ")}{" "}
+                      <span className="text-muted-foreground font-mono">{regime.marketCount}</span>
                     </Link>
                   ))}
                 </div>

@@ -216,8 +216,8 @@ function AnalyticsLineChart({
           role="img"
           aria-label={`${valueLabel} history chart`}
         >
-          {yTicks.map((tick) => (
-            <g key={tick.y}>
+          {yTicks.map((tick, tickPosition) => (
+            <g key={`y-tick-${tickPosition}-${tick.y}-${tick.value}`}>
               <line
                 x1={paddingLeft}
                 x2={width - paddingRight}
@@ -236,8 +236,8 @@ function AnalyticsLineChart({
               </text>
             </g>
           ))}
-          {xTicks.map((tick) => (
-            <g key={`${tick.index}-${tick.label}`}>
+          {xTicks.map((tick, tickPosition) => (
+            <g key={`x-tick-${tickPosition}-${tick.index}-${tick.x}-${tick.label}`}>
               <line
                 x1={tick.x}
                 x2={tick.x}
@@ -270,7 +270,7 @@ function AnalyticsLineChart({
                 .filter(({ value }) => value >= spikeThreshold && value > 0)
                 .map(({ x, y, value }, index) => (
                   <circle
-                    key={`${x}-${index}`}
+                    key={`spike-point-${index}-${x}-${y}-${value}`}
                     cx={x}
                     cy={y}
                     r={5}
@@ -467,6 +467,20 @@ const narrativeStrengthVariant = (strength: string | undefined) => {
   return "outline";
 };
 
+const regimeVariant = (regime: string | undefined) => {
+  if (
+    regime === "high_volatility" ||
+    regime === "liquidity_stress" ||
+    regime === "speculative_frenzy" ||
+    regime === "narrative_overheating"
+  ) {
+    return "danger";
+  }
+  if (regime === "momentum_driven" || regime === "elevated_attention") return "warning";
+  if (regime === "stabilization") return "success";
+  return "outline";
+};
+
 export function MarketDetailClient({ marketId }: { marketId: string }) {
   const detail = useMarketDetail(marketId);
   const [timeRange, setTimeRange] = useState<TimeRange>("6H");
@@ -480,6 +494,7 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
   const replaySummary = data?.replaySummary;
   const narrative = data?.narrative;
   const crossMarket = data?.crossMarket;
+  const regime = data?.regime;
   const rangedProbabilityHistory = useMemo(
     () => getFilteredPoints(probabilityHistory, timeRange),
     [probabilityHistory, timeRange]
@@ -611,6 +626,86 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
         />
       </div>
 
+      {regime ? (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
+            <CardTitle>Market Regime</CardTitle>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Badge variant={regimeVariant(regime.regime)}>
+                {formatNarrativeLabel(regime.regime)}
+              </Badge>
+              <Badge variant="outline">{formatNarrativeLabel(regime.attention)}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-muted-foreground text-sm leading-6">{regime.summary}</p>
+            <div className="grid gap-3 lg:grid-cols-4">
+              <div className="border-border rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Attention
+                </div>
+                <div className="mt-1 text-sm font-medium">
+                  {formatNarrativeLabel(regime.attention)}
+                </div>
+              </div>
+              <div className="border-border rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Volatility
+                </div>
+                <div className="mt-1 text-sm font-medium">
+                  {formatNarrativeLabel(regime.volatility)}
+                </div>
+              </div>
+              <div className="border-border rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Liquidity
+                </div>
+                <div className="mt-1 text-sm font-medium">
+                  {formatNarrativeLabel(regime.liquidity)}
+                </div>
+              </div>
+              <div className="border-border rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Confidence
+                </div>
+                <div className="mt-1 font-mono text-lg">{regime.confidence}/100</div>
+              </div>
+            </div>
+            {regime.transition ? (
+              <div className="border-border rounded-md border p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="warning">Transition</Badge>
+                  <Badge variant="outline">{formatNarrativeLabel(regime.transition.from)}</Badge>
+                  <span className="text-muted-foreground text-xs">to</span>
+                  <Badge variant={regimeVariant(regime.transition.to)}>
+                    {formatNarrativeLabel(regime.transition.to)}
+                  </Badge>
+                  {regime.transition.detectedAt ? (
+                    <span className="text-muted-foreground font-mono text-xs">
+                      {new Date(regime.transition.detectedAt).toLocaleString()}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="text-muted-foreground mt-2 text-sm leading-6">
+                  {regime.transition.explanation}
+                </p>
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              {regime.indicators.map((indicator, index) => (
+                <Badge
+                  key={`regime-indicator-${index}-${indicator}`}
+                  variant="default"
+                  className="normal-case"
+                >
+                  {indicator}
+                </Badge>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {narrative ? (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-3">
@@ -635,8 +730,8 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
                   Potential Drivers
                 </div>
                 <div className="mt-2 space-y-2 text-sm">
-                  {narrative.potentialDrivers.map((driver) => (
-                    <p key={driver}>{driver}</p>
+                  {narrative.potentialDrivers.map((driver, index) => (
+                    <p key={`driver-${index}-${driver}`}>{driver}</p>
                   ))}
                 </div>
               </div>
@@ -654,8 +749,8 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
                   Related Themes
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {[narrative.primaryTheme, ...narrative.relatedThemes].map((theme) => (
-                    <Badge key={theme} variant="outline">
+                  {[narrative.primaryTheme, ...narrative.relatedThemes].map((theme, index) => (
+                    <Badge key={`theme-${index}-${theme}`} variant="outline">
                       {formatNarrativeLabel(theme)}
                     </Badge>
                   ))}
@@ -765,8 +860,11 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
                         </div>
                         <div className="mt-2 line-clamp-2 text-sm font-medium">{related.title}</div>
                         <div className="text-muted-foreground mt-2 flex flex-wrap gap-1 text-xs">
-                          {related.relationshipReasons.slice(0, 3).map((reason) => (
-                            <span key={reason} className="rounded border px-1.5 py-0.5">
+                          {related.relationshipReasons.slice(0, 3).map((reason, index) => (
+                            <span
+                              key={`relationship-${related.marketId}-${index}-${reason}`}
+                              className="rounded border px-1.5 py-0.5"
+                            >
                               {reason}
                             </span>
                           ))}

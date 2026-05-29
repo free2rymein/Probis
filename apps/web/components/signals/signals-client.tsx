@@ -79,6 +79,9 @@ function SignalCard({ signal }: { signal: AnomalySignal }) {
                 </Badge>
               ) : null}
               {signal.clusterTag ? <Badge variant="outline">{signal.clusterTag}</Badge> : null}
+              {signal.marketRegime ? (
+                <Badge variant="outline">{formatType(signal.marketRegime)}</Badge>
+              ) : null}
               <Badge variant="outline">{formatType(composite)}</Badge>
               {(signal.relatedSignalCount ?? 0) > 1 ? (
                 <Badge variant="outline">{signal.relatedSignalCount} grouped</Badge>
@@ -96,6 +99,11 @@ function SignalCard({ signal }: { signal: AnomalySignal }) {
             {signal.relatedMarketContext ? (
               <p className="text-muted-foreground max-w-4xl text-xs leading-5">
                 {signal.relatedMarketContext}
+              </p>
+            ) : null}
+            {signal.regimeContext ? (
+              <p className="text-muted-foreground max-w-4xl text-xs leading-5">
+                {signal.regimeContext}
               </p>
             ) : null}
             {signal.affectedMarkets?.length ? (
@@ -117,6 +125,11 @@ function SignalCard({ signal }: { signal: AnomalySignal }) {
             <div>
               <div className="text-muted-foreground">Priority</div>
               <div className="text-foreground font-mono text-lg">{priority.toFixed(0)}</div>
+              {signal.regimeAdjustedConfidence !== undefined ? (
+                <div className="text-muted-foreground font-mono text-[11px]">
+                  regime {signal.regimeAdjustedConfidence.toFixed(0)}
+                </div>
+              ) : null}
             </div>
             <div>
               <div className="text-muted-foreground">Detected</div>

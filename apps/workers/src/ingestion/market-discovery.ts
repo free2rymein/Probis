@@ -5,6 +5,7 @@ import type { createWorkerRepositories } from "../repositories";
 import { PolymarketClient } from "../services/polymarket-client";
 import type { NormalizedMarket } from "../types/events";
 import type { PolymarketMarket } from "../types/polymarket";
+import { errorFields } from "../utils/errors";
 import { logger } from "../utils/logger";
 import { serializeJson } from "../utils/serialization";
 import { jitter, sleep } from "../utils/time";
@@ -34,7 +35,36 @@ export class MarketDiscoveryService {
     });
 
     while (!this.stopped) {
-      await this.syncOnce();
+      try {
+        await this.syncOnce();
+        await this.repositories.systemStatus
+          .success({
+            serviceName: "workers",
+            status: "running",
+            statusMessage: "Market discovery completed successfully.",
+            metadata: { lastTask: "market_discovery" }
+          })
+          .catch((statusError: unknown) => {
+            logger.warn("worker_status.market_discovery_success_failed", {
+              ...errorFields(statusError)
+            });
+          });
+      } catch (error) {
+        logger.error("market_discovery.error", {
+          ...errorFields(error)
+        });
+        await this.repositories.systemStatus
+          .failure({
+            serviceName: "workers",
+            statusMessage: "Market discovery failed; worker heartbeat is still active.",
+            metadata: { lastTask: "market_discovery", error: errorFields(error) }
+          })
+          .catch((statusError: unknown) => {
+            logger.warn("worker_status.market_discovery_failure_failed", {
+              ...errorFields(statusError)
+            });
+          });
+      }
       await sleep(jitter(this.config.MARKET_DISCOVERY_INTERVAL_MS));
     }
   }

@@ -115,7 +115,18 @@ export type DashboardMetrics = {
     marketCount: number;
     signalCount: number;
   }>;
-  ingestionHealth: "healthy" | "stale" | "idle";
+  marketRegimeDistribution: Array<{
+    regime: MarketRegime;
+    marketCount: number;
+  }>;
+  ingestionHealth: "running" | "standby" | "degraded" | "stale";
+  workerStatus: {
+    status: "running" | "standby" | "degraded" | "stale";
+    explanation: string;
+    lastHeartbeatAt: string | null;
+    lastSuccessAt: string | null;
+    lastFailureAt: string | null;
+  };
 };
 
 export type AggregatePoint = {
@@ -238,6 +249,50 @@ export type CrossMarketIntelligence = {
   confidence: number;
 };
 
+export type MarketRegime =
+  | "quiet"
+  | "elevated_attention"
+  | "momentum_driven"
+  | "high_volatility"
+  | "liquidity_stress"
+  | "speculative_frenzy"
+  | "fading_attention"
+  | "stabilization"
+  | "narrative_overheating";
+
+export type AttentionRegime = "dormant" | "active" | "elevated" | "dominant" | "overheated";
+
+export type VolatilityRegime =
+  | "stable_pricing"
+  | "rapid_repricing"
+  | "elevated_uncertainty"
+  | "directional_acceleration"
+  | "unstable_probability_swings";
+
+export type LiquidityRegime =
+  | "deep_liquidity"
+  | "normal_liquidity"
+  | "thinning_liquidity"
+  | "stressed_liquidity";
+
+export type MarketRegimeTransition = {
+  from: MarketRegime;
+  to: MarketRegime;
+  detectedAt: string | null;
+  explanation: string;
+};
+
+export type MarketRegimeSummary = {
+  regime: MarketRegime;
+  attention: AttentionRegime;
+  volatility: VolatilityRegime;
+  liquidity: LiquidityRegime;
+  transition: MarketRegimeTransition | null;
+  summary: string;
+  indicators: string[];
+  confidence: number;
+};
+
 export type MarketNarrativeSummary = {
   primaryTheme: NarrativeTheme;
   strength: NarrativeStrength;
@@ -265,6 +320,7 @@ export type MarketDetail = {
   replaySummary: MarketReplaySummary;
   narrative: MarketNarrativeSummary;
   crossMarket: CrossMarketIntelligence;
+  regime: MarketRegimeSummary;
 };
 
 export type TimelineListItem = {
@@ -445,6 +501,9 @@ export type AnomalySignal = {
   }>;
   clusterTag?: string | null;
   crossMarketConfidence?: number;
+  marketRegime?: MarketRegime;
+  regimeAdjustedConfidence?: number;
+  regimeContext?: string | null;
 };
 
 export type TimelineEvent = {

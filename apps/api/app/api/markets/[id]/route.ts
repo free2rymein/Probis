@@ -1,10 +1,15 @@
 import type {
   CrossMarketIntelligence,
+  AttentionRegime,
+  LiquidityRegime,
   MarketDetail,
   MarketNarrativeSummary,
+  MarketRegime,
+  MarketRegimeSummary,
   MarketTimelineItem,
   NarrativeStrength,
   NarrativeTheme,
+  VolatilityRegime,
   RelatedMarketNarrative,
   WalletArchetype
 } from "@probis/types";
@@ -470,6 +475,216 @@ const buildCrossMarketIntelligence = ({
   };
 };
 
+const classifyAttentionRegime = (
+  anomalyCount: number,
+  walletCount: number,
+  crossMarket: CrossMarketIntelligence,
+  volumeRatio: number
+): AttentionRegime => {
+  const score =
+    anomalyCount * 9 +
+    walletCount * 3 +
+    crossMarket.synchronizedMarketCount * 12 +
+    Math.min(20, volumeRatio * 6);
+  if (score >= 70) return "overheated";
+  if (score >= 50) return "dominant";
+  if (score >= 30) return "elevated";
+  if (score >= 12) return "active";
+  return "dormant";
+};
+
+const classifyVolatilityRegime = (
+  probabilityMoves: number[],
+  latestDelta: number
+): VolatilityRegime => {
+  const totalMove = probabilityMoves.reduce((sum, move) => sum + Math.abs(move), 0);
+  const directionChanges = probabilityMoves.filter((move, index) => {
+    const previous = probabilityMoves[index - 1];
+    return previous !== undefined && Math.sign(previous) !== Math.sign(move);
+  }).length;
+
+  if (directionChanges >= 3 && totalMove >= 0.12) return "unstable_probability_swings";
+  if (Math.abs(latestDelta) >= 0.06 && totalMove >= 0.1) return "directional_acceleration";
+  if (totalMove >= 0.16) return "elevated_uncertainty";
+  if (Math.abs(latestDelta) >= 0.04 || totalMove >= 0.08) return "rapid_repricing";
+  return "stable_pricing";
+};
+
+const classifyLiquidityRegime = (
+  liquidity: number,
+  volume24h: number,
+  probabilityMove: number
+): LiquidityRegime => {
+  const volumeLiquidityRatio = liquidity > 0 ? volume24h / liquidity : volume24h > 0 ? 99 : 0;
+  if (liquidity < 1_000 || (probabilityMove >= 0.06 && liquidity < 3_000)) {
+    return "stressed_liquidity";
+  }
+  if (liquidity < 5_000 || volumeLiquidityRatio >= 3) return "thinning_liquidity";
+  if (liquidity >= 50_000 && volumeLiquidityRatio < 1.5) return "deep_liquidity";
+  return "normal_liquidity";
+};
+
+const classifyMarketRegime = ({
+  attention,
+  volatility,
+  liquidity,
+  volumeRatio,
+  anomalyCount,
+  crossMarket,
+  latestDelta,
+  earlierRegime
+}: {
+  attention: AttentionRegime;
+  volatility: VolatilityRegime;
+  liquidity: LiquidityRegime;
+  volumeRatio: number;
+  anomalyCount: number;
+  crossMarket: CrossMarketIntelligence;
+  latestDelta: number;
+  earlierRegime?: MarketRegime;
+}): MarketRegime => {
+  if (
+    attention === "overheated" ||
+    (crossMarket.attentionState === "spreading" && anomalyCount >= 3)
+  ) {
+    return "narrative_overheating";
+  }
+  if (attention === "dominant" && volumeRatio >= 3) return "speculative_frenzy";
+  if (liquidity === "stressed_liquidity") return "liquidity_stress";
+  if (volatility === "unstable_probability_swings" || volatility === "elevated_uncertainty") {
+    return "high_volatility";
+  }
+  if (
+    volatility === "directional_acceleration" ||
+    (Math.abs(latestDelta) >= 0.04 && anomalyCount > 0)
+  ) {
+    return "momentum_driven";
+  }
+  if (attention === "elevated" || attention === "dominant") return "elevated_attention";
+  if (earlierRegime && earlierRegime !== "quiet" && volumeRatio <= 0.65 && anomalyCount <= 1) {
+    return "fading_attention";
+  }
+  if (earlierRegime && earlierRegime !== "quiet" && volatility === "stable_pricing") {
+    return "stabilization";
+  }
+  return "quiet";
+};
+
+const regimeSummaryText = (
+  regime: MarketRegime,
+  attention: AttentionRegime,
+  volatility: VolatilityRegime,
+  liquidity: LiquidityRegime
+) =>
+  `${regime.replaceAll("_", " ")} regime detected. Attention appears ${attention.replaceAll(
+    "_",
+    " "
+  )}, pricing looks ${volatility.replaceAll("_", " ")}, and liquidity appears ${liquidity.replaceAll(
+    "_",
+    " "
+  )}. Treat this as a heuristic market-state read, not a deterministic forecast.`;
+
+const buildMarketRegime = ({
+  market,
+  probabilityHistory,
+  volumeHistory,
+  walletRows,
+  anomalyRows,
+  timeline,
+  crossMarket
+}: {
+  market: MarketRow;
+  probabilityHistory: Array<{ bucket: string; yesProbability: number }>;
+  volumeHistory: Array<{ bucket: string; volume: number; tradeCount: number }>;
+  walletRows: Array<{ wallet_address: string }>;
+  anomalyRows: Array<{ detected_at: Date }>;
+  timeline: MarketTimelineItem[];
+  crossMarket: CrossMarketIntelligence;
+}): MarketRegimeSummary => {
+  const probabilityMoves = probabilityHistory.slice(1).map((point, index) => {
+    const previous = probabilityHistory[index]?.yesProbability ?? point.yesProbability;
+    return point.yesProbability - previous;
+  });
+  const latestDelta = probabilityMoves.at(-1) ?? 0;
+  const totalProbabilityMove = probabilityMoves.reduce((sum, move) => sum + Math.abs(move), 0);
+  const averageVolume =
+    volumeHistory.reduce((sum, point) => sum + point.volume, 0) / Math.max(1, volumeHistory.length);
+  const latestVolume = volumeHistory.at(-1)?.volume ?? 0;
+  const volumeRatio = averageVolume > 0 ? latestVolume / averageVolume : 0;
+  const recentAnomalyCount = anomalyRows.filter(
+    (row) => Date.now() - row.detected_at.getTime() <= 6 * 60 * 60 * 1000
+  ).length;
+  const attention = classifyAttentionRegime(
+    recentAnomalyCount,
+    walletRows.length,
+    crossMarket,
+    volumeRatio
+  );
+  const volatility = classifyVolatilityRegime(probabilityMoves.slice(-12), latestDelta);
+  const liquidity = classifyLiquidityRegime(
+    Number(market.liquidity ?? 0),
+    Number(market.volume_24h ?? 0),
+    totalProbabilityMove
+  );
+  const midpoint = Math.max(1, Math.floor(volumeHistory.length / 2));
+  const earlierAverageVolume =
+    volumeHistory.slice(0, midpoint).reduce((sum, point) => sum + point.volume, 0) /
+    Math.max(1, midpoint);
+  const earlierVolumeRatio = earlierAverageVolume > 0 ? averageVolume / earlierAverageVolume : 0;
+  const earlierRegime = classifyMarketRegime({
+    attention: earlierVolumeRatio > 1.5 ? "elevated" : "active",
+    volatility: totalProbabilityMove >= 0.08 ? "rapid_repricing" : "stable_pricing",
+    liquidity,
+    volumeRatio: earlierVolumeRatio,
+    anomalyCount: Math.max(0, anomalyRows.length - recentAnomalyCount),
+    crossMarket,
+    latestDelta
+  });
+  const regime = classifyMarketRegime({
+    attention,
+    volatility,
+    liquidity,
+    volumeRatio,
+    anomalyCount: recentAnomalyCount,
+    crossMarket,
+    latestDelta,
+    earlierRegime
+  });
+  const transition =
+    regime !== earlierRegime
+      ? {
+          from: earlierRegime,
+          to: regime,
+          detectedAt: timeline[0]?.timestamp ?? null,
+          explanation: `${earlierRegime.replaceAll("_", " ")} appears to be transitioning toward ${regime.replaceAll(
+            "_",
+            " "
+          )} based on recent volume, anomaly density, and probability movement.`
+        }
+      : null;
+  const indicators = [
+    recentAnomalyCount > 0 ? `${recentAnomalyCount} recent anomalies` : "low anomaly density",
+    volumeRatio > 0 ? `${volumeRatio.toFixed(1)}x volume baseline` : "no volume baseline",
+    `${(totalProbabilityMove * 100).toFixed(1)} pts cumulative YES movement`,
+    `${crossMarket.synchronizedMarketCount} synchronized related markets`,
+    `${walletRows.length} active wallets in recent flow`
+  ];
+
+  return {
+    regime,
+    attention,
+    volatility,
+    liquidity,
+    transition,
+    summary: regimeSummaryText(regime, attention, volatility, liquidity),
+    indicators,
+    confidence: Math.min(
+      100,
+      25 + recentAnomalyCount * 8 + walletRows.length * 2 + crossMarket.synchronizedMarketCount * 10
+    )
+  };
+};
+
 const buildReplaySummary = (timeline: MarketTimelineItem[]): MarketDetail["replaySummary"] => {
   if (timeline.length === 0) {
     return {
@@ -850,6 +1065,15 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
     relatedMarkets,
     sharedWalletCount: sharedWalletAddresses.length
   });
+  const regime = buildMarketRegime({
+    market,
+    probabilityHistory,
+    volumeHistory,
+    walletRows,
+    anomalyRows,
+    timeline,
+    crossMarket
+  });
 
   const data: MarketDetail = {
     market: {
@@ -911,7 +1135,8 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
     timeline,
     replaySummary,
     narrative,
-    crossMarket
+    crossMarket,
+    regime
   };
 
   return ok(data, requestId);

@@ -35,12 +35,60 @@ type DashboardRow = {
     marketCount: number;
     signalCount: number;
   }> | null;
+  market_regime_distribution: Array<{
+    regime: DashboardMetrics["marketRegimeDistribution"][number]["regime"];
+    marketCount: number;
+  }> | null;
 };
 
-const healthFromBucket = (bucket: Date | null): DashboardMetrics["ingestionHealth"] => {
-  if (!bucket) return "idle";
-  const ageMs = Date.now() - bucket.getTime();
-  return ageMs <= 5 * 60_000 ? "healthy" : "stale";
+type WorkerStatusRow = {
+  status: string;
+  status_message: string | null;
+  last_heartbeat_at: Date | null;
+  last_success_at: Date | null;
+  last_failure_at: Date | null;
+};
+
+const workerStatusFromRow = (
+  row: WorkerStatusRow | null | undefined
+): DashboardMetrics["workerStatus"] => {
+  if (!row?.last_heartbeat_at) {
+    return {
+      status: "standby",
+      explanation:
+        "No worker heartbeat has been recorded yet. Data may still be available from previous runs.",
+      lastHeartbeatAt: null,
+      lastSuccessAt: row?.last_success_at?.toISOString() ?? null,
+      lastFailureAt: row?.last_failure_at?.toISOString() ?? null
+    };
+  }
+
+  const ageMs = Date.now() - row.last_heartbeat_at.getTime();
+  const status =
+    ageMs > 10 * 60_000
+      ? "stale"
+      : row.status === "degraded"
+        ? "degraded"
+        : row.status === "standby"
+          ? "standby"
+          : "running";
+
+  const explanation =
+    status === "stale"
+      ? "Worker heartbeat is older than 10 minutes. Dashboard data is still shown from stored tables."
+      : status === "degraded"
+        ? (row.status_message ?? "Worker heartbeat is current, but a recent sub-task failed.")
+        : status === "standby"
+          ? (row.status_message ?? "Worker is in standby.")
+          : (row.status_message ?? "Worker heartbeat is current.");
+
+  return {
+    status,
+    explanation,
+    lastHeartbeatAt: row.last_heartbeat_at.toISOString(),
+    lastSuccessAt: row.last_success_at?.toISOString() ?? null,
+    lastFailureAt: row.last_failure_at?.toISOString() ?? null
+  };
 };
 
 const parseTopCategories = (
@@ -235,12 +283,61 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
         ORDER BY signal_count DESC, market_count DESC
         LIMIT 6
       ) ranked
+    ),
+    market_regime_distribution AS (
+      SELECT json_agg(
+        json_build_object('regime', regime, 'marketCount', market_count)
+        ORDER BY market_count DESC, regime ASC
+      ) AS market_regime_distribution
+      FROM (
+        SELECT regime, COUNT(*)::integer AS market_count
+        FROM (
+          SELECT
+            m.id,
+            CASE
+              WHEN COALESCE(m.liquidity, 0) < 1000 THEN 'liquidity_stress'
+              WHEN COALESCE(signal_counts.recent_6h_signals, 0) >= 5 THEN 'narrative_overheating'
+              WHEN COALESCE(signal_counts.recent_6h_signals, 0) >= 3 THEN 'elevated_attention'
+              WHEN COALESCE(m.volume_24h, 0) > COALESCE(m.liquidity, 0) * 3 THEN 'speculative_frenzy'
+              WHEN COALESCE(m.volume_24h, 0) > COALESCE(m.liquidity, 0) THEN 'momentum_driven'
+              ELSE 'quiet'
+            END AS regime
+          FROM markets m
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*)::integer AS recent_6h_signals
+            FROM anomaly_events ae
+            WHERE ae.market_id = m.id
+              AND ae.detected_at >= now() - interval '6 hours'
+          ) signal_counts ON true
+          WHERE m.is_active_universe = true
+        ) per_market_regime
+        GROUP BY regime
+      ) ranked
     )
     SELECT *
-    FROM market_counts, market_freshness, active_universe_stats, aggregate_stats, timeline_stats, anomaly_stats, wallet_stats, cross_market_clusters
+    FROM market_counts, market_freshness, active_universe_stats, aggregate_stats, timeline_stats, anomaly_stats, wallet_stats, cross_market_clusters, market_regime_distribution
   `;
 
+  let workerStatusRow: WorkerStatusRow | null = null;
+  try {
+    const [statusRow] = await sql<WorkerStatusRow[]>`
+      SELECT
+        status,
+        status_message,
+        last_heartbeat_at,
+        last_success_at,
+        last_failure_at
+      FROM system_status
+      WHERE service_name = 'workers'
+      LIMIT 1
+    `;
+    workerStatusRow = statusRow ?? null;
+  } catch {
+    workerStatusRow = null;
+  }
+
   const latestBucket = row?.latest_aggregate_bucket ?? null;
+  const workerStatus = workerStatusFromRow(workerStatusRow);
   const data: DashboardMetrics = {
     trackedMarketCount: Number(row?.tracked_market_count ?? 0),
     openMarketCount: Number(row?.open_market_count ?? 0),
@@ -272,7 +369,9 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
     coordinatedActivityCount: Number(row?.coordinated_activity_count ?? 0),
     recentTimelineEvents1h: Number(row?.recent_timeline_events_1h ?? 0),
     crossMarketClusters: parseArray(row?.cross_market_clusters ?? null),
-    ingestionHealth: healthFromBucket(latestBucket)
+    marketRegimeDistribution: parseArray(row?.market_regime_distribution ?? null),
+    ingestionHealth: workerStatus.status,
+    workerStatus
   };
 
   return ok(data, requestId);

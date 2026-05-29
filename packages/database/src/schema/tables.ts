@@ -259,6 +259,19 @@ export const walletDailyStats = pgTable(
   })
 );
 
+export const systemStatus = pgTable("system_status", {
+  serviceName: text("service_name").primaryKey(),
+  status: text("status").notNull().default("standby"),
+  statusMessage: text("status_message"),
+  lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
+  lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+  lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
+  metadata: jsonb("metadata")
+    .notNull()
+    .default(sql`'{}'::jsonb`),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+
 export const anomalyEvents = pgTable(
   "anomaly_events",
   {

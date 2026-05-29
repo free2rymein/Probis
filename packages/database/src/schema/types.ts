@@ -7,6 +7,7 @@ import type {
   markets,
   narrativeEvents,
   trades,
+  systemStatus,
   walletDailyStats,
   walletMarketActivity,
   walletProfiles,
@@ -33,6 +34,9 @@ export type NewWalletMarketActivity = InferInsertModel<typeof walletMarketActivi
 
 export type WalletDailyStats = InferSelectModel<typeof walletDailyStats>;
 export type NewWalletDailyStats = InferInsertModel<typeof walletDailyStats>;
+
+export type SystemStatus = InferSelectModel<typeof systemStatus>;
+export type NewSystemStatus = InferInsertModel<typeof systemStatus>;
 
 export type AnomalyEvent = InferSelectModel<typeof anomalyEvents>;
 export type NewAnomalyEvent = InferInsertModel<typeof anomalyEvents>;

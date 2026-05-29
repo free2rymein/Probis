@@ -92,7 +92,36 @@ export class TradeIngestionWorker {
     });
 
     while (!this.stopped) {
-      await this.pollOnce();
+      try {
+        await this.pollOnce();
+        await this.repositories.systemStatus
+          .success({
+            serviceName: "workers",
+            status: "running",
+            statusMessage: "Trade polling completed successfully.",
+            metadata: { lastTask: "trade_polling" }
+          })
+          .catch((statusError: unknown) => {
+            logger.warn("worker_status.trade_poll_success_failed", {
+              ...errorFields(statusError)
+            });
+          });
+      } catch (error) {
+        logger.error("trade_polling.error", {
+          ...errorFields(error)
+        });
+        await this.repositories.systemStatus
+          .failure({
+            serviceName: "workers",
+            statusMessage: "Trade polling failed; worker heartbeat is still active.",
+            metadata: { lastTask: "trade_polling", error: errorFields(error) }
+          })
+          .catch((statusError: unknown) => {
+            logger.warn("worker_status.trade_poll_failure_failed", {
+              ...errorFields(statusError)
+            });
+          });
+      }
       await sleep(jitter(this.config.TRADE_POLL_INTERVAL_MS));
     }
   }

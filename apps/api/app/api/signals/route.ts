@@ -1,5 +1,6 @@
 import type {
   AnomalySignal,
+  MarketRegime,
   NarrativeStrength,
   NarrativeTheme,
   PaginatedResponse
@@ -202,6 +203,68 @@ const relatedMarketContext = (
   }
   if (row.market_category) {
     return `Category overlap places this signal in the ${row.market_category} narrative lane.`;
+  }
+  return null;
+};
+
+const marketRegimeForSignal = (
+  row: SignalRow,
+  priorityScore: number,
+  relatedSignalCount: number,
+  walletQuality: WalletQuality,
+  liquidity: number,
+  volume24h: number
+): MarketRegime => {
+  const probabilityMove = probabilityMoveMagnitude(row.metadata);
+  const volumeStrength = volumeAnomalyStrength(row.metadata);
+  const volumeLiquidityRatio = liquidity > 0 ? volume24h / liquidity : volume24h > 0 ? 99 : 0;
+
+  if (priorityScore >= 82 && relatedSignalCount >= 3) return "narrative_overheating";
+  if (priorityScore >= 76 && volumeStrength >= 3) return "speculative_frenzy";
+  if (liquidity < 1_000 || (probabilityMove >= 0.06 && liquidity < 3_000)) {
+    return "liquidity_stress";
+  }
+  if (probabilityMove >= 0.08) return "high_volatility";
+  if (probabilityMove >= 0.04 || walletQuality.conviction >= 65) return "momentum_driven";
+  if (volumeStrength >= 2 || relatedSignalCount >= 2 || volumeLiquidityRatio >= 2) {
+    return "elevated_attention";
+  }
+  if (priorityScore < 35 && relatedSignalCount <= 1) return "quiet";
+  return "stabilization";
+};
+
+const regimeAdjustedConfidence = (
+  priorityScore: number,
+  regime: MarketRegime,
+  walletQuality: WalletQuality,
+  relatedSignalCount: number
+) => {
+  let adjustment = 0;
+  if (regime === "quiet" && walletQuality.conviction >= 50) adjustment += 8;
+  if (regime === "liquidity_stress" || regime === "high_volatility") adjustment += 4;
+  if (regime === "narrative_overheating" || regime === "speculative_frenzy") adjustment -= 8;
+  if (relatedSignalCount >= 3) adjustment += 5;
+  return clamp(priorityScore + adjustment);
+};
+
+const regimeContext = (regime: MarketRegime) => {
+  if (regime === "quiet") {
+    return "A signal surfacing from a quiet regime may deserve attention because baseline activity is low.";
+  }
+  if (regime === "narrative_overheating" || regime === "speculative_frenzy") {
+    return "Repeated anomalies in an overheated regime may contain more noise; confidence is interpreted cautiously.";
+  }
+  if (regime === "liquidity_stress") {
+    return "Liquidity appears thin, so probability movement may be amplified by smaller flows.";
+  }
+  if (regime === "momentum_driven") {
+    return "Market behavior suggests directional momentum may be persisting.";
+  }
+  if (regime === "high_volatility") {
+    return "Market behavior suggests elevated volatility and unstable repricing.";
+  }
+  if (regime === "elevated_attention") {
+    return "Attention regime appears elevated across recent activity and signal density.";
   }
   return null;
 };
@@ -600,6 +663,20 @@ export const GET = withApiHandler(async (request, { requestId }) => {
       walletQuality
     );
     const affectedMarkets = affectedMarketsForSignal(row, signalNarrativeTheme, marketContexts);
+    const signalMarketRegime = marketRegimeForSignal(
+      row,
+      priorityScore,
+      relatedSignalCount,
+      walletQuality,
+      liquidity,
+      volume24h
+    );
+    const adjustedConfidence = regimeAdjustedConfidence(
+      priorityScore,
+      signalMarketRegime,
+      walletQuality,
+      relatedSignalCount
+    );
     const contributors = contributorsForSignal(
       row,
       walletQuality,
@@ -642,6 +719,9 @@ export const GET = withApiHandler(async (request, { requestId }) => {
         100,
         priorityScore + affectedMarkets.length * 6 + (relatedSignalCount > 1 ? 8 : 0)
       ),
+      marketRegime: signalMarketRegime,
+      regimeAdjustedConfidence: adjustedConfidence,
+      regimeContext: regimeContext(signalMarketRegime),
       relatedMarketContext: relatedMarketContext(
         row,
         signalNarrativeTheme,
