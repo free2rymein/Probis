@@ -257,6 +257,27 @@ export function DashboardClient() {
             <CardTitle>Recent Timeline</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
+            {metrics.crossMarketClusters.length ? (
+              <div className="border-border mb-3 rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Thematic Clusters
+                </div>
+                <div className="mt-2 space-y-2">
+                  {metrics.crossMarketClusters.slice(0, 4).map((cluster) => (
+                    <Link
+                      key={cluster.cluster}
+                      href="/signals?sort=priority"
+                      className="hover:bg-muted/30 flex items-center justify-between rounded border px-2 py-1.5 transition-colors"
+                    >
+                      <span className="text-sm">{cluster.cluster}</span>
+                      <span className="text-muted-foreground font-mono text-xs">
+                        {cluster.marketCount} mkts / {cluster.signalCount} sigs
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {timeline.isError ? (
               <div className="text-muted-foreground flex items-center gap-2 text-sm">
                 <AlertCircle className="h-4 w-4" />

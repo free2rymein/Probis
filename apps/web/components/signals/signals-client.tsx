@@ -78,6 +78,7 @@ function SignalCard({ signal }: { signal: AnomalySignal }) {
                   {formatType(signal.narrativeTheme)}
                 </Badge>
               ) : null}
+              {signal.clusterTag ? <Badge variant="outline">{signal.clusterTag}</Badge> : null}
               <Badge variant="outline">{formatType(composite)}</Badge>
               {(signal.relatedSignalCount ?? 0) > 1 ? (
                 <Badge variant="outline">{signal.relatedSignalCount} grouped</Badge>
@@ -96,6 +97,20 @@ function SignalCard({ signal }: { signal: AnomalySignal }) {
               <p className="text-muted-foreground max-w-4xl text-xs leading-5">
                 {signal.relatedMarketContext}
               </p>
+            ) : null}
+            {signal.affectedMarkets?.length ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {signal.affectedMarkets.map((market) => (
+                  <Link
+                    key={market.marketId}
+                    href={`/markets/${market.marketId}`}
+                    className="text-muted-foreground hover:text-foreground rounded border px-2 py-1 text-xs hover:underline"
+                    title={market.relationship}
+                  >
+                    {market.title}
+                  </Link>
+                ))}
+              </div>
             ) : null}
           </div>
           <div className="grid min-w-40 grid-cols-2 gap-2 text-right text-xs lg:block lg:space-y-2">

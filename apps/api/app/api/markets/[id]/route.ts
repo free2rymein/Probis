@@ -1,4 +1,5 @@
 import type {
+  CrossMarketIntelligence,
   MarketDetail,
   MarketNarrativeSummary,
   MarketTimelineItem,
@@ -54,6 +55,8 @@ type RelatedMarketRow = {
   recent_signal_count: string;
   recent_volume: string | null;
   shared_wallet_count: string;
+  first_activity_at: Date | null;
+  latest_activity_at: Date | null;
 };
 
 const archetypes = new Set<WalletArchetype>([
@@ -312,6 +315,161 @@ const buildMarketNarrative = ({
   };
 };
 
+const clusterName = (theme: NarrativeTheme) => {
+  if (theme === "ai_regulation") return "AI / Regulation";
+  if (theme === "monetary_policy") return "Monetary Policy";
+  if (theme === "election_uncertainty") return "Elections";
+  if (theme === "trade_war_risk") return "Trade War";
+  if (theme === "conflict_escalation" || theme === "geopolitical_escalation") {
+    return "Conflict Escalation";
+  }
+  if (theme === "crypto_etf_optimism") return "Crypto ETF";
+  if (theme === "energy_shock") return "Energy Markets";
+  if (theme === "recession_fears") return "Recession Risk";
+  return "Liquidity Stress";
+};
+
+const leadLagStatus = (
+  currentFirstActivityAt: Date | null,
+  relatedFirstActivityAt: Date | null
+): "leading" | "lagging" | "synchronized" | "unclear" => {
+  if (!currentFirstActivityAt || !relatedFirstActivityAt) return "unclear";
+  const diffMs = relatedFirstActivityAt.getTime() - currentFirstActivityAt.getTime();
+  if (Math.abs(diffMs) <= 30 * 60_000) return "synchronized";
+  return diffMs > 0 ? "leading" : "lagging";
+};
+
+const buildCrossMarketIntelligence = ({
+  market,
+  theme,
+  timeline,
+  relatedMarketRows,
+  relatedMarkets,
+  sharedWalletCount
+}: {
+  market: MarketRow;
+  theme: NarrativeTheme;
+  timeline: MarketTimelineItem[];
+  relatedMarketRows: RelatedMarketRow[];
+  relatedMarkets: RelatedMarketNarrative[];
+  sharedWalletCount: number;
+}): CrossMarketIntelligence => {
+  const currentFirstActivityAt =
+    timeline.length > 0
+      ? new Date(Math.min(...timeline.map((item) => new Date(item.timestamp).getTime())))
+      : null;
+  const enrichedRelated = relatedMarkets.map((related) => {
+    const row = relatedMarketRows.find((candidate) => candidate.id === related.marketId);
+    const synchronizedSignalCount = Number(row?.recent_signal_count ?? 0);
+    const relatedSharedWalletCount = Number(row?.shared_wallet_count ?? 0);
+    const status = leadLagStatus(currentFirstActivityAt, row?.first_activity_at ?? null);
+    const reasons = [
+      row?.category === market.category ? "category overlap" : null,
+      related.sharedTheme === theme ? "theme overlap" : null,
+      synchronizedSignalCount > 0 ? "synchronized signal activity" : null,
+      relatedSharedWalletCount > 0 ? "shared wallet participation" : null,
+      Number(row?.recent_volume ?? 0) > 0 ? "recent volume activity" : null
+    ].filter((reason): reason is string => Boolean(reason));
+
+    return {
+      ...related,
+      relationshipReasons: reasons.length ? reasons : ["nearby thematic market"],
+      sharedWalletCount: relatedSharedWalletCount,
+      synchronizedSignalCount,
+      latestActivityAt: row?.latest_activity_at?.toISOString() ?? null,
+      leadLagStatus: status
+    };
+  });
+  const synchronizedMarketCount = enrichedRelated.filter(
+    (related) => related.leadLagStatus === "synchronized" || related.synchronizedSignalCount > 0
+  ).length;
+  const leadingCount = enrichedRelated.filter(
+    (related) => related.leadLagStatus === "leading"
+  ).length;
+  const laggingCount = enrichedRelated.filter(
+    (related) => related.leadLagStatus === "lagging"
+  ).length;
+  const leadingStatus =
+    leadingCount > laggingCount
+      ? "leading"
+      : laggingCount > leadingCount
+        ? "lagging"
+        : synchronizedMarketCount > 0
+          ? "synchronized"
+          : "unclear";
+  const attentionState =
+    synchronizedMarketCount >= 3
+      ? "spreading"
+      : synchronizedMarketCount >= 2
+        ? "synchronized"
+        : enrichedRelated.length >= 2
+          ? "building"
+          : "quiet";
+  const leadingMarketTitle =
+    leadingStatus === "lagging"
+      ? (enrichedRelated
+          .filter((related) => related.leadLagStatus === "lagging")
+          .sort(
+            (left, right) =>
+              new Date(left.latestActivityAt ?? 0).getTime() -
+              new Date(right.latestActivityAt ?? 0).getTime()
+          )[0]?.title ?? null)
+      : leadingStatus === "leading"
+        ? market.title
+        : null;
+  const confidence = Math.min(
+    100,
+    enrichedRelated.length * 10 + synchronizedMarketCount * 15 + sharedWalletCount * 8
+  );
+  const propagation = enrichedRelated
+    .filter((related) => related.latestActivityAt)
+    .slice(0, 6)
+    .map((related) => ({
+      id: `cross-market-${related.marketId}`,
+      timestamp: related.latestActivityAt ?? new Date().toISOString(),
+      theme,
+      marketId: related.marketId,
+      marketTitle: related.title,
+      eventType:
+        related.sharedWalletCount > 0
+          ? ("shared_wallet_flow" as const)
+          : related.synchronizedSignalCount > 0
+            ? ("signal_cluster" as const)
+            : ("volume_activity" as const),
+      explanation:
+        related.leadLagStatus === "leading"
+          ? `${market.title} appears to have moved before this related market within the observed window.`
+          : related.leadLagStatus === "lagging"
+            ? `${related.title} showed related activity before this market; this market may be reacting.`
+            : `${related.title} showed related activity close to this market's activity window.`,
+      confidence: Math.min(
+        95,
+        35 + related.synchronizedSignalCount * 12 + related.sharedWalletCount * 15
+      )
+    }));
+
+  return {
+    clusterName: clusterName(theme),
+    theme,
+    summary:
+      attentionState === "spreading"
+        ? `${clusterName(theme)} attention appears to be spreading across related markets.`
+        : attentionState === "synchronized"
+          ? `Multiple ${clusterName(theme)} markets are active in the same observed window.`
+          : attentionState === "building"
+            ? `${clusterName(theme)} related markets show early signs of clustered attention.`
+            : `Cross-market ${clusterName(theme)} activity is still quiet.`,
+    attentionState,
+    leadingStatus,
+    leadingMarketTitle,
+    relatedMarkets: enrichedRelated,
+    propagation,
+    sharedWalletCount,
+    synchronizedMarketCount,
+    confidence
+  };
+};
+
 const buildReplaySummary = (timeline: MarketTimelineItem[]): MarketDetail["replaySummary"] => {
   if (timeline.length === 0) {
     return {
@@ -540,7 +698,9 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
       m.category,
       COUNT(DISTINCT ae.id)::text AS recent_signal_count,
       COALESCE(m.volume_24h, NULLIF(m.metadata->>'gamma_volume', '')::numeric)::text AS recent_volume,
-      COUNT(DISTINCT shared_wallets.wallet_address)::text AS shared_wallet_count
+      COUNT(DISTINCT shared_wallets.wallet_address)::text AS shared_wallet_count,
+      MIN(ae.detected_at) AS first_activity_at,
+      MAX(ae.detected_at) AS latest_activity_at
     FROM markets m
     LEFT JOIN anomaly_events ae
       ON ae.market_id = m.id
@@ -682,6 +842,14 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
     anomalyRows,
     relatedMarkets
   });
+  const crossMarket = buildCrossMarketIntelligence({
+    market,
+    theme: narrative.primaryTheme,
+    timeline,
+    relatedMarketRows,
+    relatedMarkets,
+    sharedWalletCount: sharedWalletAddresses.length
+  });
 
   const data: MarketDetail = {
     market: {
@@ -742,7 +910,8 @@ export const GET = withApiHandler(async (_request, { requestId }, routeContext) 
     })),
     timeline,
     replaySummary,
-    narrative
+    narrative,
+    crossMarket
   };
 
   return ok(data, requestId);

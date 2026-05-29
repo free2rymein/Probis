@@ -110,6 +110,11 @@ export type DashboardMetrics = {
   recentWhaleAlertsCount: number;
   coordinatedActivityCount: number;
   recentTimelineEvents1h: number;
+  crossMarketClusters: Array<{
+    cluster: string;
+    marketCount: number;
+    signalCount: number;
+  }>;
   ingestionHealth: "healthy" | "stale" | "idle";
 };
 
@@ -200,6 +205,39 @@ export type RelatedMarketNarrative = {
   explanation: string;
 };
 
+export type CrossMarketRelatedMarket = RelatedMarketNarrative & {
+  relationshipReasons: string[];
+  sharedWalletCount: number;
+  synchronizedSignalCount: number;
+  latestActivityAt: string | null;
+  leadLagStatus: "leading" | "lagging" | "synchronized" | "unclear";
+};
+
+export type CrossMarketPropagationEvent = {
+  id: string;
+  timestamp: string;
+  theme: NarrativeTheme;
+  marketId: string;
+  marketTitle: string;
+  eventType: "signal_cluster" | "probability_move" | "volume_activity" | "shared_wallet_flow";
+  explanation: string;
+  confidence: number;
+};
+
+export type CrossMarketIntelligence = {
+  clusterName: string;
+  theme: NarrativeTheme;
+  summary: string;
+  attentionState: "quiet" | "building" | "synchronized" | "spreading";
+  leadingStatus: "leading" | "lagging" | "synchronized" | "unclear";
+  leadingMarketTitle: string | null;
+  relatedMarkets: CrossMarketRelatedMarket[];
+  propagation: CrossMarketPropagationEvent[];
+  sharedWalletCount: number;
+  synchronizedMarketCount: number;
+  confidence: number;
+};
+
 export type MarketNarrativeSummary = {
   primaryTheme: NarrativeTheme;
   strength: NarrativeStrength;
@@ -226,6 +264,7 @@ export type MarketDetail = {
   timeline: MarketTimelineItem[];
   replaySummary: MarketReplaySummary;
   narrative: MarketNarrativeSummary;
+  crossMarket: CrossMarketIntelligence;
 };
 
 export type TimelineListItem = {
@@ -399,6 +438,13 @@ export type AnomalySignal = {
   narrativeTheme?: NarrativeTheme;
   narrativeStrength?: NarrativeStrength;
   relatedMarketContext?: string | null;
+  affectedMarkets?: Array<{
+    marketId: string;
+    title: string;
+    relationship: string;
+  }>;
+  clusterTag?: string | null;
+  crossMarketConfidence?: number;
 };
 
 export type TimelineEvent = {

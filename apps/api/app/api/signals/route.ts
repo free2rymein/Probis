@@ -47,6 +47,12 @@ type WalletQuality = {
   coordinatedFlow: boolean;
 };
 
+type MarketContextRow = {
+  id: string;
+  title: string;
+  category: string;
+};
+
 type EnrichedSignal = AnomalySignal & {
   dedupeKey: string;
   marketCategory: string | null;
@@ -199,6 +205,47 @@ const relatedMarketContext = (
   }
   return null;
 };
+
+const clusterTag = (theme: NarrativeTheme) => {
+  if (theme === "ai_regulation") return "AI / Regulation";
+  if (theme === "monetary_policy") return "Monetary Policy";
+  if (theme === "election_uncertainty") return "Elections";
+  if (theme === "trade_war_risk") return "Trade War";
+  if (theme === "crypto_etf_optimism") return "Crypto ETF";
+  if (theme === "energy_shock") return "Energy Markets";
+  if (theme === "recession_fears") return "Recession Risk";
+  if (theme === "liquidity_stress") return "Liquidity Stress";
+  return "Conflict Escalation";
+};
+
+const affectedMarketsForSignal = (
+  row: SignalRow,
+  theme: NarrativeTheme,
+  marketContexts: MarketContextRow[]
+) =>
+  marketContexts
+    .filter((market) => market.id !== row.market_id)
+    .map((market) => {
+      const sameCategory = market.category === row.market_category;
+      const themeWord = theme.split("_")[0] ?? theme;
+      const keywordOverlap = market.title.toLowerCase().includes(themeWord);
+      if (!sameCategory && !keywordOverlap) return null;
+      return {
+        marketId: market.id,
+        title: market.title,
+        relationship: sameCategory ? "category overlap" : "theme keyword overlap"
+      };
+    })
+    .filter(
+      (
+        market
+      ): market is {
+        marketId: string;
+        title: string;
+        relationship: string;
+      } => Boolean(market)
+    )
+    .slice(0, 3);
 
 const signalLifecycle = (
   row: SignalRow,
@@ -492,6 +539,13 @@ export const GET = withApiHandler(async (request, { requestId }) => {
           FROM wallet_profiles
           WHERE lower(wallet_address) = ANY(${walletAddresses}::text[])
         `;
+  const marketContexts = await sql<MarketContextRow[]>`
+    SELECT id, title, category
+    FROM markets
+    WHERE is_active_universe = true
+    ORDER BY universe_rank ASC NULLS LAST, updated_at DESC
+    LIMIT 250
+  `;
 
   const walletsByAddress = new Map<string, WalletQuality>(
     walletRows.map((row) => {
@@ -545,6 +599,7 @@ export const GET = withApiHandler(async (request, { requestId }) => {
       relatedSignalCount,
       walletQuality
     );
+    const affectedMarkets = affectedMarketsForSignal(row, signalNarrativeTheme, marketContexts);
     const contributors = contributorsForSignal(
       row,
       walletQuality,
@@ -581,6 +636,12 @@ export const GET = withApiHandler(async (request, { requestId }) => {
       isSuppressed: false,
       narrativeTheme: signalNarrativeTheme,
       narrativeStrength: signalNarrativeStrength,
+      affectedMarkets,
+      clusterTag: clusterTag(signalNarrativeTheme),
+      crossMarketConfidence: Math.min(
+        100,
+        priorityScore + affectedMarkets.length * 6 + (relatedSignalCount > 1 ? 8 : 0)
+      ),
       relatedMarketContext: relatedMarketContext(
         row,
         signalNarrativeTheme,

@@ -479,6 +479,7 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
   const timeline = data?.timeline ?? [];
   const replaySummary = data?.replaySummary;
   const narrative = data?.narrative;
+  const crossMarket = data?.crossMarket;
   const rangedProbabilityHistory = useMemo(
     () => getFilteredPoints(probabilityHistory, timeRange),
     [probabilityHistory, timeRange]
@@ -688,6 +689,126 @@ export function MarketDetailClient({ marketId }: { marketId: string }) {
                 </div>
               </div>
             ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {crossMarket ? (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
+            <CardTitle>Cross-Market Intelligence</CardTitle>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Badge variant={narrativeStrengthVariant(crossMarket.attentionState)}>
+                {crossMarket.attentionState}
+              </Badge>
+              <Badge variant="outline">{crossMarket.clusterName}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 lg:grid-cols-4">
+              <div className="border-border rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Propagation
+                </div>
+                <div className="mt-1 text-sm font-medium">{crossMarket.summary}</div>
+              </div>
+              <div className="border-border rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Lead / Lag
+                </div>
+                <div className="mt-1 text-sm font-medium capitalize">
+                  {crossMarket.leadingStatus}
+                </div>
+                <div className="text-muted-foreground mt-1 line-clamp-1 text-xs">
+                  {crossMarket.leadingMarketTitle ?? "No clear leader yet"}
+                </div>
+              </div>
+              <div className="border-border rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Synchronized Markets
+                </div>
+                <div className="mt-1 font-mono text-lg">
+                  {formatCompactNumber(crossMarket.synchronizedMarketCount)}
+                </div>
+              </div>
+              <div className="border-border rounded-md border p-3">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Shared Wallets
+                </div>
+                <div className="mt-1 font-mono text-lg">
+                  {formatCompactNumber(crossMarket.sharedWalletCount)}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+              <div className="space-y-2">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Related Markets
+                </div>
+                {crossMarket.relatedMarkets.length ? (
+                  <div className="grid gap-2 lg:grid-cols-2">
+                    {crossMarket.relatedMarkets.map((related) => (
+                      <Link
+                        key={related.marketId}
+                        href={`/markets/${related.marketId}`}
+                        className="border-border hover:bg-muted/30 rounded-md border p-3 transition-colors"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="outline">{related.leadLagStatus}</Badge>
+                          <Badge variant="outline">
+                            {formatNarrativeLabel(related.sharedTheme)}
+                          </Badge>
+                          <span className="text-muted-foreground ml-auto font-mono text-xs">
+                            {related.activityScore.toFixed(0)}
+                          </span>
+                        </div>
+                        <div className="mt-2 line-clamp-2 text-sm font-medium">{related.title}</div>
+                        <div className="text-muted-foreground mt-2 flex flex-wrap gap-1 text-xs">
+                          {related.relationshipReasons.slice(0, 3).map((reason) => (
+                            <span key={reason} className="rounded border px-1.5 py-0.5">
+                              {reason}
+                            </span>
+                          ))}
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState
+                    title="No related active markets"
+                    description="Cross-market relationships appear once related tracked markets share signals, wallets, categories, or themes."
+                    className="min-h-32"
+                  />
+                )}
+              </div>
+              <div className="space-y-2">
+                <div className="text-muted-foreground text-xs uppercase tracking-wide">
+                  Propagation Replay
+                </div>
+                {crossMarket.propagation.length ? (
+                  <div className="space-y-2">
+                    {crossMarket.propagation.map((event) => (
+                      <div key={event.id} className="border-border rounded-md border p-3 text-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <Badge variant="outline">{event.eventType.replaceAll("_", " ")}</Badge>
+                          <span className="text-muted-foreground font-mono text-xs">
+                            {new Date(event.timestamp).toLocaleTimeString()}
+                          </span>
+                        </div>
+                        <p className="text-muted-foreground mt-2 leading-5">{event.explanation}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState
+                    title="No propagation replay yet"
+                    description="Propagation events appear when related markets activate in a bounded timing window."
+                    className="min-h-32"
+                  />
+                )}
+              </div>
+            </div>
           </CardContent>
         </Card>
       ) : null}

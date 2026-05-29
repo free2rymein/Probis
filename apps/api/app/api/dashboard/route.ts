@@ -30,6 +30,11 @@ type DashboardRow = {
   recent_whale_alerts_count: string;
   coordinated_activity_count: string;
   recent_timeline_events_1h: string;
+  cross_market_clusters: Array<{
+    cluster: string;
+    marketCount: number;
+    signalCount: number;
+  }> | null;
 };
 
 const healthFromBucket = (bucket: Date | null): DashboardMetrics["ingestionHealth"] => {
@@ -197,9 +202,42 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
             AND anomaly_type = 'coordinated_wallet_activity'
         ) AS coordinated_activity_count
       FROM wallet_profiles
+    ),
+    cross_market_clusters AS (
+      SELECT json_agg(
+        json_build_object(
+          'cluster', cluster,
+          'marketCount', market_count,
+          'signalCount', signal_count
+        )
+        ORDER BY signal_count DESC, market_count DESC, cluster ASC
+      ) AS cross_market_clusters
+      FROM (
+        SELECT
+          CASE
+            WHEN lower(m.title || ' ' || m.category) ~ 'ai|openai|anthropic|nvidia|chip|semiconductor|regulation|antitrust' THEN 'AI / Regulation'
+            WHEN lower(m.title || ' ' || m.category) ~ 'fed|fomc|rate cut|interest rate|cpi|inflation|treasury' THEN 'Monetary Policy'
+            WHEN lower(m.title || ' ' || m.category) ~ 'election|president|senate|congress|poll|vote|primary|trump|biden|vance' THEN 'Elections'
+            WHEN lower(m.title || ' ' || m.category) ~ 'tariff|trade war|export control|trade deal' THEN 'Trade War'
+            WHEN lower(m.title || ' ' || m.category) ~ 'bitcoin|ethereum|crypto|etf|sec' THEN 'Crypto ETF'
+            WHEN lower(m.title || ' ' || m.category) ~ 'oil|gas|energy|opec|brent|wti' THEN 'Energy Markets'
+            WHEN lower(m.title || ' ' || m.category) ~ 'recession|gdp|unemployment|jobs|payroll' THEN 'Recession Risk'
+            ELSE 'Conflict Escalation'
+          END AS cluster,
+          COUNT(DISTINCT m.id)::integer AS market_count,
+          COUNT(DISTINCT ae.id)::integer AS signal_count
+        FROM markets m
+        LEFT JOIN anomaly_events ae
+          ON ae.market_id = m.id
+          AND ae.detected_at >= now() - interval '24 hours'
+        WHERE m.is_active_universe = true
+        GROUP BY cluster
+        ORDER BY signal_count DESC, market_count DESC
+        LIMIT 6
+      ) ranked
     )
     SELECT *
-    FROM market_counts, market_freshness, active_universe_stats, aggregate_stats, timeline_stats, anomaly_stats, wallet_stats
+    FROM market_counts, market_freshness, active_universe_stats, aggregate_stats, timeline_stats, anomaly_stats, wallet_stats, cross_market_clusters
   `;
 
   const latestBucket = row?.latest_aggregate_bucket ?? null;
@@ -233,6 +271,7 @@ export const GET = withApiHandler(async (_request, { requestId }) => {
     recentWhaleAlertsCount: Number(row?.recent_whale_alerts_count ?? 0),
     coordinatedActivityCount: Number(row?.coordinated_activity_count ?? 0),
     recentTimelineEvents1h: Number(row?.recent_timeline_events_1h ?? 0),
+    crossMarketClusters: parseArray(row?.cross_market_clusters ?? null),
     ingestionHealth: healthFromBucket(latestBucket)
   };
 
