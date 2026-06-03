@@ -1,14 +1,6 @@
-import { ok } from "@/lib/responses";
 import { withApiHandler } from "@/lib/handler";
+import { ok } from "@/lib/responses";
 
-export const GET = withApiHandler((_request, { requestId }) =>
-  ok(
-    {
-      service: "probis-api",
-      status: "healthy",
-      uptime: process.uptime(),
-      checkedAt: new Date().toISOString()
-    },
-    requestId
-  )
+export const GET = withApiHandler(async (_request, { requestId }) =>
+  ok({ status: "ok", service: "probis-api", schema: "probis2_foundation" }, requestId)
 );

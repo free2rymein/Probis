@@ -1,39 +1,129 @@
-# Probis Workers
+# Probis 2.0 Workers
 
-TypeScript worker runtime for market discovery, realtime trade ingestion, normalization, incremental aggregation, and replay-ready event writing.
+Explorer-first worker runtime for normalized Polymarket discovery and bounded
+market snapshots.
 
 ## Commands
 
 ```bash
 pnpm --filter @probis/workers dev
-pnpm --filter @probis/workers dev:mock
+pnpm --filter @probis/workers discovery:once
+pnpm --filter @probis/workers lifecycle:sync-closed
+pnpm --filter @probis/workers lifecycle:reconcile
+pnpm --filter @probis/workers lifecycle:validate
 pnpm --filter @probis/workers typecheck
 pnpm --filter @probis/workers lint
 ```
 
-## Architecture
+## Active Workers
 
-- `config`: environment-driven runtime settings
-- `services`: Polymarket client, database connection, mock source
-- `ingestion`: market discovery and trade ingestion loops
-- `normalization`: source-specific adapters into normalized Probis events
-- `aggregation`: incremental 1-minute candle computation
-- `queues`: bounded batch flushing for low write amplification
-- `repositories`: typed Drizzle persistence for markets, trades, aggregates, and timeline events
-- `realtime`: in-process event bus prepared for Redis/Supabase realtime fanout
+- `MarketDiscoveryWorker`: fetches Gamma events as the primary taxonomy source,
+  preserves venue tags, flattens nested tradable markets, and syncs canonical
+  explorer categories. Discovery intentionally persists Gamma event children
+  only so stale standalone records do not pollute the explorer baseline.
+- `MarketSnapshotWorker`: periodically refreshes Gamma data and writes compact
+  `market_snapshots` rows for known markets.
+- `LifecycleReconciliationWorker`: checks a bounded, prioritized set of locally
+  open exceptions against Gamma event detail after each discovery cycle. Detail
+  proof is a fallback for rows not corrected by the closed-feed batch sync.
 
 ## Cost Strategy
 
-Workers batch writes, deduplicate trades by transaction hash before insert, and aggregate incrementally in memory before upserting `market_aggregates_1m`. UI paths should consume aggregates and anomaly events instead of raw trades.
-
-## Mock Mode
-
-Mock mode creates a deterministic local market and emits synthetic trades for pipeline testing:
-
-```bash
-WORKER_MODE=mock pnpm --filter @probis/workers dev
-```
+The foundation does not ingest raw trades, wallets, signals, anomalies, or
+narratives. Snapshot frequency defaults to five minutes to provide useful
+charts without creating a high-frequency storage obligation.
 
 ## Live Mode
 
-Live mode discovers active Polymarket markets through Gamma and polls CLOB trades. `POLYMARKET_WS_URL` can be set when a supported websocket endpoint is available; polling remains the fallback.
+Live mode discovers active Polymarket markets through Gamma. Apply the Probis
+2.0 schema reset and foundation migration manually before starting the worker.
+
+## Taxonomy Migration And Backfill
+
+Stop any running worker before applying `0002_probis2_taxonomy.sql`. The
+migration adds event and tag relationships without deleting existing markets.
+Restarting discovery performs an idempotent backfill through upserts:
+
+```bash
+pnpm --filter @probis/database db:migrate
+pnpm --filter @probis/workers discovery:once
+```
+
+`0008_probis2_sports_lifecycle.sql` adds compact Gamma lifecycle fields for
+completed-sports filtering. After migration and one-shot discovery, run:
+
+```bash
+pnpm --filter @probis/workers lifecycle:validate
+```
+
+`0009_probis2_lifecycle_reconciliation.sql` adds compact event lifecycle truth
+and bounded reconciliation timestamps. Discovery runs reconciliation
+automatically; it can also be run independently:
+
+```bash
+pnpm --filter @probis/database db:migrate
+pnpm --filter @probis/workers discovery:once
+pnpm --filter @probis/workers lifecycle:reconcile
+pnpm --filter @probis/workers lifecycle:validate
+```
+
+```env
+LIFECYCLE_RECONCILE_LIMIT=25
+LIFECYCLE_RECONCILE_CONCURRENCY=5
+LIFECYCLE_RECONCILE_STALE_MINUTES=60
+CLOSED_EVENT_PAGE_LIMIT=100
+CLOSED_EVENT_MAX_PAGES=10
+OPEN_FEED_STALE_GRACE_MINUTES=60
+STALE_CLOSE_END_DATE_BUFFER_HOURS=6
+ENABLE_SET_BASED_STALE_CLOSE=false
+```
+
+Each discovery cycle stamps all open-feed rows with one run timestamp, syncs
+recently closed Gamma events through set-based parent and child updates, and
+reports conservative stale candidates. Set-based stale closure remains disabled
+by default until its dry-run counts are reviewed.
+
+The API event explorer uses a configurable Balanced quality profile by
+default. These filters apply to event groups only, not child markets:
+
+```env
+MIN_EVENT_VOLUME=5000
+MIN_EVENT_LIQUIDITY=500
+MIN_EVENT_VOLUME_24H=0
+```
+
+For a local development reset, truncating explorer tables remains an explicit
+manual operation. It is not required for the normal taxonomy backfill. If
+stale pre-taxonomy rows make local validation confusing, stop the worker,
+review and run `packages/database/sql/probis2-reset-explorer-data.sql`, then
+restart discovery.
+
+The guarded command form requires an explicit confirmation token:
+
+```bash
+PROBIS_DEV_RESET_CONFIRM=RESET_PROBIS2_EXPLORER_DATA pnpm --filter @probis/database db:reset:explorer
+```
+
+`0003_probis2_event_explorer.sql` adds compact event-level metrics and
+classification fields for grouped browsing. Apply migrations before starting
+the worker:
+
+```bash
+pnpm --filter @probis/database db:migrate
+```
+
+After a development reset and the first discovery cycle, validate grouped
+coverage:
+
+```sql
+select c.name, count(*) as event_count
+from events e
+join categories c on c.id = e.primary_category_id
+where e.active = true and e.closed = false and e.archived = false
+group by c.name
+order by event_count desc;
+
+select count(*) from events;
+select count(*) from event_markets;
+select count(*) from event_tags;
+```

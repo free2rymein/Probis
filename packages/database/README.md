@@ -1,119 +1,68 @@
 # @probis/database
 
-Production database layer for Probis.
+Probis 2.0 starts with a deliberately small explorer-first schema. The earlier
+intelligence schema is preserved in `migrations-legacy/` and documented in
+`README-legacy.md`.
 
-This package owns:
+## Why The Schema Is Smaller
 
-- Drizzle PostgreSQL schema definitions
-- SQL migrations
-- migration runner
-- typed Supabase clients
-- typed Drizzle database client
-- reusable repositories
-- pagination and sorting helpers
+The first Probis 2.0 product surface is a prediction market explorer. Its core
+jobs are venue discovery, category browsing, market lookup, outcome display,
+and lightweight chart retrieval. Wallets, trades, signals, narratives, and
+anomaly storage are intentionally deferred until the corresponding product
+phases return.
 
-## Setup
+This keeps the initial data model easy to reason about and prevents an
+intelligence-first ingestion pipeline from setting the storage budget for the
+explorer.
 
-Required environment variables:
+## Foundation Tables
 
-```bash
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/probis
-REDIS_URL=redis://localhost:6379
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-```
+- `venues`: normalized prediction-market providers.
+- `categories`: venue-scoped discovery groupings.
+- `markets`: normalized market metadata and lifecycle state.
+- `market_outcomes`: latest outcome probabilities and volumes.
+- `market_snapshots`: compact chart points for market-level time series.
+- `events`: venue event groupings used as the primary Polymarket taxonomy
+  source.
+- `venue_tags`, `event_tags`, and `market_tags`: normalized source taxonomy
+  without raw payload storage.
+- `market_categories`: canonical explorer classifications with an explicit
+  primary category cached on `markets.primary_category_id`.
 
-Run migrations:
+`market_snapshots` is optimized for chart reads through
+`(market_id, snapshot_time desc)`. There is no raw trade table in the Probis 2.0
+foundation.
 
-```bash
-pnpm --filter @probis/database db:migrate
-```
+## Storage Philosophy
 
-Generate future Drizzle migrations:
+- Store normalized market facts, not raw provider payloads.
+- Keep current outcome state separate from historical chart samples.
+- Prefer bounded snapshots over raw event firehoses.
+- Add intelligence tables only when a product phase proves they are needed.
+- Keep legacy migrations for reference; do not apply them to a new Probis 2.0
+  database.
 
-```bash
-pnpm --filter @probis/database db:generate
-```
+## Snapshot Retention
 
-Open Drizzle Studio:
+Start with a bounded retention policy:
 
-```bash
-pnpm --filter @probis/database db:studio
-```
+- Keep dense snapshots for recent chart windows.
+- Downsample older snapshots before long-term retention.
+- Delete historical samples that no longer support a product chart or
+  operational requirement.
 
-## Schema Strategy
+The first implementation should choose snapshot cadence and retention after
+measuring provider update rates. The schema intentionally does not force a
+high-frequency schedule.
 
-`markets` stores normalized prediction market metadata with stable `source + external_id` identity.
+## Applying The Reset
 
-`trades` is the high-throughput append-only ingestion table. It is partitioned by `trade_timestamp` and uses a composite primary key `(id, trade_timestamp)` so PostgreSQL can enforce uniqueness on partitioned data. Create partitions ahead of time with:
+`sql/probis2-drop-schema.sql` is a manual reset helper. Review it before running
+it against any environment. It drops the legacy intelligence schema with
+`CASCADE` and is never executed automatically.
 
-```sql
-select create_trade_partition_month('2026-06-01'::date);
-```
-
-`market_aggregates_1m` is the primary UI datasource. Most dashboards should read aggregates instead of raw trades.
-
-`wallet_stats` stores precomputed wallet intelligence so expensive scoring does not happen in request paths.
-
-`anomaly_events` is the main intelligence event table. Keep summaries compact and structured metadata bounded.
-
-`narrative_events` stores external timeline events for narrative correlation.
-
-`market_timeline` powers replay by storing normalized event payloads in timestamp order.
-
-`alerts` is RLS-ready for user-specific alert policies.
-
-## Indexing Strategy
-
-- Raw trade drilldowns: `(market_id, trade_timestamp)`, `wallet_address`, `trade_timestamp DESC`
-- UI charts: `(market_id, bucket)` on `market_aggregates_1m`
-- Wallet leaderboards: `reputation_score DESC`, `information_advantage_score DESC`
-- Intelligence feed: `severity_score DESC, detected_at DESC`, `anomaly_type`
-- Narrative filtering: `event_timestamp DESC`, `tags` GIN
-- Replay: `(market_id, event_timestamp)`
-
-## Realtime Strategy
-
-The migration adds realtime-compatible tables to `supabase_realtime` when the publication exists:
-
-- `markets`
-- `market_aggregates_1m`
-- `anomaly_events`
-- `market_timeline`
-- `alerts`
-
-Raw `trades` is intentionally not added to realtime by default. Stream aggregate and anomaly updates to clients; keep raw trade firehoses in workers or specialized channels.
-
-## RLS Strategy
-
-RLS is enabled on every table. Policies are intentionally deferred until auth roles and tenancy boundaries are finalized.
-
-Expected direction:
-
-- public or authenticated read policies for market metadata
-- service-role writes for ingestion, aggregates, anomalies, and timeline
-- user-owned policies for `alerts`
-- no browser writes to raw intelligence tables
-
-## Low-Cost Storage Strategy
-
-Hot storage:
-
-- recent trade partitions
-- current 1m aggregates
-- recent anomaly and timeline events
-
-Warm storage:
-
-- older aggregates
-- compact replay windows
-- wallet snapshots
-
-Cold archival:
-
-- detach old `trades_*` partitions
-- export to Parquet in object storage
-- query cold data through batch jobs or a warehouse only when needed
-
-Keep UI paths aggregate-first. Use raw trades only for drilldown, replay reconstruction, and worker jobs.
+`migrations/0001_probis2_foundation.sql` creates the fresh explorer foundation.
+The existing backend TypeScript schema still targets the preserved legacy
+engine and must be adapted in a later implementation phase before the reset is
+applied to a shared environment.

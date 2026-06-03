@@ -9,14 +9,12 @@
     "build": "tsc --noEmit",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "db:migrate": "tsx src/migrations/run.ts",
+    "db:reset:explorer": "tsx src/migrations/reset-explorer-data.ts",
     "db:studio": "drizzle-kit studio --config drizzle.config.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@probis/shared": "workspace:*",
-    "@supabase/ssr": "^0.5.2",
-    "@supabase/supabase-js": "^2.49.8",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.38.4",
     "postgres": "^3.4.5",

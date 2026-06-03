@@ -10,37 +10,15 @@ const packageEnvPath = resolve(process.cwd(), ".env");
 const rootEnvPath = resolve(process.cwd(), "../..", ".env");
 
 loadEnv({ path: rootEnvPath });
-
-if (existsSync(packageEnvPath)) {
-  loadEnv({ path: packageEnvPath, override: true });
-}
+if (existsSync(packageEnvPath)) loadEnv({ path: packageEnvPath, override: true });
 
 const migrationsFolder = resolve(process.cwd(), "migrations");
 const env = getMigrationEnv();
-
-const connection = postgres(env.DATABASE_URL, {
-  max: 1,
-  prepare: false,
-  idle_timeout: 20,
-  connect_timeout: 10
-});
-
-const db = drizzle(connection);
+const connection = postgres(env.DATABASE_URL, { max: 1, prepare: false });
 
 try {
-  await migrate(db, {
-    migrationsFolder,
-    migrationsSchema: "drizzle",
-    migrationsTable: "__drizzle_migrations"
-  });
-
-  console.warn(
-    JSON.stringify({
-      level: "info",
-      event: "migrations.complete",
-      migrationsFolder
-    })
-  );
+  await migrate(drizzle(connection), { migrationsFolder });
+  console.warn(JSON.stringify({ level: "info", event: "migrations.complete", migrationsFolder }));
 } finally {
   await connection.end();
 }

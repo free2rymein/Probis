@@ -6,11 +6,19 @@ import prettier from "eslint-config-prettier";
 
 export default [
   {
-    ignores: ["**/.next/**", "**/dist/**", "**/node_modules/**", "**/coverage/**"]
+    ignores: [
+      "**/.next/**",
+      "**/.next-dev/**",
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/coverage/**",
+      "apps/web-legacy/**",
+      "legacy/**"
+    ]
   },
   js.configs.recommended,
   {
-    files: ["apps/web/**/*.{ts,tsx}", "apps/api/**/*.{ts,tsx}"],
+    files: ["apps/web-v2/**/*.{ts,tsx}", "apps/api/**/*.{ts,tsx}"],
     plugins: {
       "@next/next": nextPlugin
     },

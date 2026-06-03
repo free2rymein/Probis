@@ -5,24 +5,29 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
-    "dev:mock": "WORKER_MODE=mock tsx src/index.ts",
     "start": "tsx src/index.ts",
+    "discovery:once": "tsx src/run-market-discovery-once.ts",
+    "lifecycle:reconcile": "tsx src/run-lifecycle-reconciliation-once.ts",
+    "lifecycle:sync-closed": "tsx src/run-closed-feed-sync-once.ts",
+    "lifecycle:validate": "tsx src/validate-sports-lifecycle.ts",
+    "lifecycle:investigate": "tsx src/investigate-stale-sports-event.ts",
+    "staging:refresh": "tsx src/run-staging-refresh-once.ts",
+    "staging:cleanup": "tsx src/run-staging-cleanup-once.ts",
+    "staging:normalize": "tsx src/run-staging-normalize-once.ts",
+    "explorer-cards:refresh": "tsx src/run-explorer-card-refresh-once.ts",
+    "pipeline:once": "tsx src/run-full-pipeline-once.ts",
     "build": "tsc --noEmit",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@probis/database": "workspace:*",
     "@probis/shared": "workspace:*",
     "dotenv": "^16.4.7",
-    "drizzle-orm": "^0.38.4",
     "postgres": "^3.4.5",
-    "ws": "^8.18.0",
     "zod": "^3.25.28"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",
-    "@types/ws": "^8.5.13",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3"
   }

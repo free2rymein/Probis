@@ -1,51 +1,63 @@
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 import type {
-  alerts,
-  anomalyEvents,
-  marketAggregates1m,
-  marketTimeline,
+  categories,
+  eventMarkets,
+  events,
+  eventTags,
+  explorerEventCards,
+  gammaIngestionBatches,
+  gammaRawEvents,
+  gammaRawMarkets,
+  marketCategories,
+  marketOutcomes,
   markets,
-  narrativeEvents,
-  trades,
-  systemStatus,
-  walletDailyStats,
-  walletMarketActivity,
-  walletProfiles,
-  walletStats
+  marketSnapshots,
+  marketTags,
+  venueTags,
+  venues
 } from "./tables";
+
+export type Venue = InferSelectModel<typeof venues>;
+export type NewVenue = InferInsertModel<typeof venues>;
+
+export type Category = InferSelectModel<typeof categories>;
+export type NewCategory = InferInsertModel<typeof categories>;
 
 export type Market = InferSelectModel<typeof markets>;
 export type NewMarket = InferInsertModel<typeof markets>;
 
-export type Trade = InferSelectModel<typeof trades>;
-export type NewTrade = InferInsertModel<typeof trades>;
+export type MarketOutcome = InferSelectModel<typeof marketOutcomes>;
+export type NewMarketOutcome = InferInsertModel<typeof marketOutcomes>;
 
-export type MarketAggregate1m = InferSelectModel<typeof marketAggregates1m>;
-export type NewMarketAggregate1m = InferInsertModel<typeof marketAggregates1m>;
+export type MarketSnapshot = InferSelectModel<typeof marketSnapshots>;
+export type NewMarketSnapshot = InferInsertModel<typeof marketSnapshots>;
 
-export type WalletStats = InferSelectModel<typeof walletStats>;
-export type NewWalletStats = InferInsertModel<typeof walletStats>;
+export type Event = InferSelectModel<typeof events>;
+export type NewEvent = InferInsertModel<typeof events>;
 
-export type WalletProfile = InferSelectModel<typeof walletProfiles>;
-export type NewWalletProfile = InferInsertModel<typeof walletProfiles>;
+export type VenueTag = InferSelectModel<typeof venueTags>;
+export type NewVenueTag = InferInsertModel<typeof venueTags>;
 
-export type WalletMarketActivity = InferSelectModel<typeof walletMarketActivity>;
-export type NewWalletMarketActivity = InferInsertModel<typeof walletMarketActivity>;
+export type EventMarket = InferSelectModel<typeof eventMarkets>;
+export type NewEventMarket = InferInsertModel<typeof eventMarkets>;
 
-export type WalletDailyStats = InferSelectModel<typeof walletDailyStats>;
-export type NewWalletDailyStats = InferInsertModel<typeof walletDailyStats>;
+export type EventTag = InferSelectModel<typeof eventTags>;
+export type NewEventTag = InferInsertModel<typeof eventTags>;
 
-export type SystemStatus = InferSelectModel<typeof systemStatus>;
-export type NewSystemStatus = InferInsertModel<typeof systemStatus>;
+export type MarketTag = InferSelectModel<typeof marketTags>;
+export type NewMarketTag = InferInsertModel<typeof marketTags>;
 
-export type AnomalyEvent = InferSelectModel<typeof anomalyEvents>;
-export type NewAnomalyEvent = InferInsertModel<typeof anomalyEvents>;
+export type MarketCategory = InferSelectModel<typeof marketCategories>;
+export type NewMarketCategory = InferInsertModel<typeof marketCategories>;
 
-export type NarrativeEvent = InferSelectModel<typeof narrativeEvents>;
-export type NewNarrativeEvent = InferInsertModel<typeof narrativeEvents>;
+export type GammaIngestionBatch = InferSelectModel<typeof gammaIngestionBatches>;
+export type NewGammaIngestionBatch = InferInsertModel<typeof gammaIngestionBatches>;
 
-export type MarketTimelineEvent = InferSelectModel<typeof marketTimeline>;
-export type NewMarketTimelineEvent = InferInsertModel<typeof marketTimeline>;
+export type GammaRawEvent = InferSelectModel<typeof gammaRawEvents>;
+export type NewGammaRawEvent = InferInsertModel<typeof gammaRawEvents>;
 
-export type Alert = InferSelectModel<typeof alerts>;
-export type NewAlert = InferInsertModel<typeof alerts>;
+export type GammaRawMarket = InferSelectModel<typeof gammaRawMarkets>;
+export type NewGammaRawMarket = InferInsertModel<typeof gammaRawMarkets>;
+
+export type ExplorerEventCard = InferSelectModel<typeof explorerEventCards>;
+export type NewExplorerEventCard = InferInsertModel<typeof explorerEventCards>;
