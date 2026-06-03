@@ -579,4 +579,37 @@ export class StagingRepository {
       };
     });
   }
+
+  async truncateRawStaging(): Promise<RawCleanupStats> {
+    return this.sql.begin(async (transaction) => {
+      const [eventCount] = await transaction<{ count: number }[]>`
+        select count(*)::int as count from gamma_raw_events
+      `;
+      const [marketCount] = await transaction<{ count: number }[]>`
+        select count(*)::int as count from gamma_raw_markets
+      `;
+      const affectedBatches = await transaction<{ id: string }[]>`
+        with affected_batches as (
+          select batch_id from gamma_raw_events
+          union
+          select batch_id from gamma_raw_markets
+        )
+        update gamma_ingestion_batches batches set
+          raw_cleanup_at = now()
+        from affected_batches affected
+        where batches.id = affected.batch_id
+        returning batches.id
+      `;
+
+      await transaction`
+        truncate table gamma_raw_events, gamma_raw_markets
+      `;
+
+      return {
+        rawEventsDeleted: eventCount?.count ?? 0,
+        rawMarketsDeleted: marketCount?.count ?? 0,
+        affectedBatches: affectedBatches.length
+      };
+    });
+  }
 }

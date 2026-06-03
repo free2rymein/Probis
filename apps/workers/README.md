@@ -114,6 +114,23 @@ If `explorer_event_cards` is empty or stale, rebuild the full pipeline:
 corepack pnpm --filter @probis/workers run pipeline:once
 ```
 
+Raw Gamma staging payloads are useful when debugging failed normalization runs.
+By default, successful pipeline runs retain the latest successful raw batches:
+
+```env
+RAW_STAGING_CLEANUP_MODE=retain-latest
+```
+
+For Supabase-constrained environments, a successful pipeline can remove all raw
+staging payloads after `explorer_event_cards` refreshes. This keeps
+`gamma_ingestion_batches` metadata but truncates `gamma_raw_events` and
+`gamma_raw_markets`. The UI and API do not depend on raw staging rows after the
+read model refresh succeeds:
+
+```env
+RAW_STAGING_CLEANUP_MODE=truncate-after-success
+```
+
 For a local development reset, truncating explorer tables remains an explicit
 manual operation. It is not required for the normal taxonomy backfill. If
 stale pre-taxonomy rows make local validation confusing, stop the worker,

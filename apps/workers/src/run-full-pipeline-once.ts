@@ -176,14 +176,29 @@ try {
   });
 
   const cleanupStartedAt = Date.now();
-  logger.info("full_pipeline.staging_cleanup.start", {});
-  const cleanup = await staging.cleanupRawStaging({
-    keepSuccessfulBatches: config.RAW_STAGING_KEEP_SUCCESSFUL_BATCHES,
-    failedRetentionMinutes: config.RAW_FAILED_STAGING_RETENTION_MINUTES,
-    otherRetentionMinutes: config.RAW_STAGING_RETENTION_MINUTES
-  });
+  const cleanupMode = config.RAW_STAGING_CLEANUP_MODE;
+  logger.info("full_pipeline.staging_cleanup.start", { cleanupMode });
+  if (cleanupMode === "truncate-after-success") {
+    logger.warn("full_pipeline.staging_cleanup.truncate_after_success", {
+      cleanupMode,
+      batchMetadataRetained: true,
+      rawDebugPayloadsRemoved: true,
+      message: "Raw Gamma staging payloads will be removed after successful explorer card refresh."
+    });
+  }
+  const cleanup = cleanupMode === "truncate-after-success"
+    ? await staging.truncateRawStaging()
+    : await staging.cleanupRawStaging({
+      keepSuccessfulBatches: config.RAW_STAGING_KEEP_SUCCESSFUL_BATCHES,
+      failedRetentionMinutes: config.RAW_FAILED_STAGING_RETENTION_MINUTES,
+      otherRetentionMinutes: config.RAW_STAGING_RETENTION_MINUTES
+    });
   logger.info("full_pipeline.staging_cleanup.complete", {
     ...cleanup,
+    cleanupMode,
+    cleanupOperation: cleanupMode === "truncate-after-success" ? "truncate" : "retain-latest",
+    batchMetadataRetained: true,
+    rawDebugPayloadsRemoved: cleanupMode === "truncate-after-success",
     durationMs: Date.now() - cleanupStartedAt
   });
 
@@ -206,6 +221,7 @@ try {
     excludedMarkets: normalization.excludedMarkets,
     cardsBuilt: cards.cardsBuilt,
     visibleCards: cards.visibleCards,
+    cleanupMode,
     rawEventsDeleted: cleanup.rawEventsDeleted,
     rawMarketsDeleted: cleanup.rawMarketsDeleted,
     durationMs: Date.now() - startedAt

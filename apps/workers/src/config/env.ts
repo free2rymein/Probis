@@ -27,6 +27,7 @@ export const workerConfigSchema = z.object({
   RAW_STAGING_RETENTION_MINUTES: z.coerce.number().int().min(1).default(60),
   RAW_STAGING_KEEP_SUCCESSFUL_BATCHES: z.coerce.number().int().min(1).default(2),
   RAW_FAILED_STAGING_RETENTION_MINUTES: z.coerce.number().int().min(1).default(360),
+  RAW_STAGING_CLEANUP_MODE: z.enum(["retain-latest", "truncate-after-success"]).default("retain-latest"),
   INGESTION_BATCH_RETENTION_DAYS: z.coerce.number().int().min(1).default(7),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info")
 });
