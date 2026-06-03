@@ -62,6 +62,22 @@ high-frequency schedule.
 it against any environment. It drops the legacy intelligence schema with
 `CASCADE` and is never executed automatically.
 
+For a development-only Probis 2.0 explorer data reset, use the guarded reset
+command instead. It truncates explorer, staging, and read-model data without
+dropping schema objects:
+
+```bash
+PROBIS_DEV_RESET_CONFIRM=RESET_PROBIS2_EXPLORER_DATA corepack pnpm --filter @probis/database run db:reset:explorer
+corepack pnpm --filter @probis/workers run pipeline:once
+```
+
+If the API needs to remain available while debugging read-model data, force the
+legacy dynamic query path:
+
+```bash
+EVENTS_QUERY_MODE=legacy pnpm dev:api
+```
+
 `migrations/0001_probis2_foundation.sql` creates the fresh explorer foundation.
 The existing backend TypeScript schema still targets the preserved legacy
 engine and must be adapted in a later implementation phase before the reset is

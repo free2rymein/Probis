@@ -11,6 +11,8 @@ pnpm --filter @probis/workers discovery:once
 pnpm --filter @probis/workers lifecycle:sync-closed
 pnpm --filter @probis/workers lifecycle:reconcile
 pnpm --filter @probis/workers lifecycle:validate
+pnpm --filter @probis/workers explorer-cards:refresh
+pnpm --filter @probis/workers pipeline:once
 pnpm --filter @probis/workers typecheck
 pnpm --filter @probis/workers lint
 ```
@@ -92,16 +94,38 @@ MIN_EVENT_LIQUIDITY=500
 MIN_EVENT_VOLUME_24H=0
 ```
 
+The recommended Probis 2.0 API runtime reads `/api/events` and
+`/api/categories` from `explorer_event_cards` with legacy fallback:
+
+```env
+EVENTS_QUERY_MODE=read-model-with-legacy-fallback
+```
+
+Force the legacy dynamic query path only when debugging or recovering from a
+read-model issue:
+
+```env
+EVENTS_QUERY_MODE=legacy
+```
+
+If `explorer_event_cards` is empty or stale, rebuild the full pipeline:
+
+```bash
+corepack pnpm --filter @probis/workers run pipeline:once
+```
+
 For a local development reset, truncating explorer tables remains an explicit
 manual operation. It is not required for the normal taxonomy backfill. If
 stale pre-taxonomy rows make local validation confusing, stop the worker,
 review and run `packages/database/sql/probis2-reset-explorer-data.sql`, then
-restart discovery.
+run the full pipeline to rebuild staging, normalized explorer data, and
+`explorer_event_cards`.
 
 The guarded command form requires an explicit confirmation token:
 
 ```bash
 PROBIS_DEV_RESET_CONFIRM=RESET_PROBIS2_EXPLORER_DATA pnpm --filter @probis/database db:reset:explorer
+corepack pnpm --filter @probis/workers run pipeline:once
 ```
 
 `0003_probis2_event_explorer.sql` adds compact event-level metrics and

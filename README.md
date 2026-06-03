@@ -69,6 +69,34 @@ Required variables are documented in `.env.example`.
 
 Environment validation is intentionally centralized in app/package helpers so missing values fail early in production while development can use safe placeholders.
 
+## Probis 2.0 Explorer Runtime
+
+The recommended local API mode uses the prebuilt `explorer_event_cards` read
+model with legacy query fallback:
+
+```bash
+EVENTS_QUERY_MODE=read-model-with-legacy-fallback pnpm dev:api
+```
+
+This mode is used by both `/api/events` and `/api/categories`. It preserves the
+legacy dynamic query path as a runtime fallback if the read model is unavailable.
+
+To force the older dynamic query path explicitly:
+
+```bash
+EVENTS_QUERY_MODE=legacy pnpm dev:api
+```
+
+If `explorer_event_cards` is empty or stale, refresh the full Probis 2.0 data
+pipeline:
+
+```bash
+corepack pnpm --filter @probis/workers run pipeline:once
+```
+
+After a development explorer reset, run the same `pipeline:once` command to
+rebuild staging, normalized explorer tables, and the read model.
+
 ## Development Workflow
 
 Use shared packages for reusable contracts and utilities. Keep feature-specific behavior inside the owning app until it is used by multiple surfaces.
