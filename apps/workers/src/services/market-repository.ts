@@ -21,6 +21,19 @@ const chunked = <T>(items: T[], size = 250) =>
 const uniqueBy = <T>(items: T[], keyFor: (item: T) => string) =>
   [...new Map(items.map((item) => [keyFor(item), item])).values()];
 
+const DEFAULT_RELATIONSHIP_SYNC_BATCH_SIZE = 1_000;
+
+type MarketRepositoryOptions = {
+  relationshipSyncBatchSize?: number;
+};
+
+type RelationshipSyncCounters = {
+  candidateRows: number;
+  uniqueRows: number;
+  batchSize: number;
+  batches: number;
+};
+
 type SyncStats = {
   events: number;
   markets: number;
@@ -28,6 +41,7 @@ type SyncStats = {
   categoryCounts: Record<string, number>;
   otherMarkets: number;
   unknownTags: number;
+  timings: Record<string, number>;
 };
 
 export type ClosedFeedSyncStats = {
@@ -79,7 +93,14 @@ const eventConfirmedClosed = (event: GammaEvent) =>
   || Boolean(event.closedTime);
 
 export class MarketRepository {
-  constructor(private readonly sql: postgres.Sql) {}
+  private readonly relationshipSyncBatchSize: number;
+
+  constructor(private readonly sql: postgres.Sql, options: MarketRepositoryOptions = {}) {
+    this.relationshipSyncBatchSize = Math.max(
+      100,
+      Math.min(5_000, Math.trunc(options.relationshipSyncBatchSize ?? DEFAULT_RELATIONSHIP_SYNC_BATCH_SIZE))
+    );
+  }
 
   async ensurePolymarketVenue() {
     const [venue] = await this.sql<{ id: string }[]>`
@@ -93,8 +114,21 @@ export class MarketRepository {
   }
 
   async syncEvents(events: NormalizedEvent[], standaloneMarkets: NormalizedMarket[], runStartedAt = new Date()) {
+    const totalStartedAt = Date.now();
+    const timings: Record<string, number> = {};
+    const timed = async <T>(name: string, task: () => Promise<T>) => {
+      const startedAt = Date.now();
+      try {
+        return await task();
+      } finally {
+        timings[name] = Date.now() - startedAt;
+      }
+    };
+
+    const venueStartedAt = Date.now();
     const venueId = await this.ensurePolymarketVenue();
-    const categoryIds = await this.ensureCanonicalCategories(venueId);
+    timings.ensureVenueMs = Date.now() - venueStartedAt;
+    const categoryIds = await timed("ensureCategoriesMs", () => this.ensureCanonicalCategories(venueId));
     const tagIds = new Map<string, string>();
     const stats: SyncStats = {
       events: 0,
@@ -102,9 +136,11 @@ export class MarketRepository {
       categoriesAssigned: 0,
       categoryCounts: {},
       otherMarkets: 0,
-      unknownTags: 0
+      unknownTags: 0,
+      timings
     };
 
+    const prepareStartedAt = Date.now();
     const eventMarketIds = new Set(events.flatMap((event) => event.markets.map((market) => market.externalMarketId)));
     const unmatchedMarkets = standaloneMarkets.filter((market) => !eventMarketIds.has(market.externalMarketId));
     const markets = uniqueBy([...events.flatMap((event) => event.markets), ...unmatchedMarkets], (market) => market.externalMarketId);
@@ -112,22 +148,27 @@ export class MarketRepository {
       [...events.flatMap((event) => event.tags), ...markets.flatMap((market) => market.tags)],
       (tag) => tag.slug
     );
+    timings.prepareRowsMs = Date.now() - prepareStartedAt;
+    timings.preparedEvents = events.length;
+    timings.preparedMarkets = markets.length;
+    timings.preparedTags = tags.length;
 
-    const persistedTagIds = await this.upsertTags(venueId, tags);
+    const persistedTagIds = await timed("upsertTagsMs", () => this.upsertTags(venueId, tags));
     for (const [slug, id] of persistedTagIds) tagIds.set(slug, id);
-    const persistedEventIds = await this.upsertEvents(venueId, events, categoryIds, runStartedAt);
-    const persistedMarketIds = await this.upsertMarkets(venueId, markets, categoryIds, runStartedAt);
+    const persistedEventIds = await timed("upsertEventsMs", () => this.upsertEvents(venueId, events, categoryIds, runStartedAt));
+    const persistedMarketIds = await timed("upsertMarketsMs", () => this.upsertMarkets(venueId, markets, categoryIds, runStartedAt));
 
-    await this.syncEventMarkets(events, persistedEventIds, persistedMarketIds);
-    await this.syncEventTags(events, persistedEventIds, tagIds);
-    await this.syncMarketCategories(markets, persistedMarketIds, categoryIds);
-    await this.syncMarketTags(markets, persistedMarketIds, tagIds);
-    await this.syncOutcomes(markets, persistedMarketIds);
+    this.addRelationshipCounters(timings, "syncEventMarkets", await timed("syncEventMarketsMs", () => this.syncEventMarkets(events, persistedEventIds, persistedMarketIds)));
+    this.addRelationshipCounters(timings, "syncEventTags", await timed("syncEventTagsMs", () => this.syncEventTags(events, persistedEventIds, tagIds)));
+    this.addRelationshipCounters(timings, "syncMarketCategories", await timed("syncMarketCategoriesMs", () => this.syncMarketCategories(markets, persistedMarketIds, categoryIds)));
+    this.addRelationshipCounters(timings, "syncMarketTags", await timed("syncMarketTagsMs", () => this.syncMarketTags(markets, persistedMarketIds, tagIds)));
+    this.addRelationshipCounters(timings, "syncOutcomes", await timed("syncOutcomesMs", () => this.syncOutcomes(markets, persistedMarketIds)));
 
     stats.events = events.length;
     for (const market of markets) {
       this.addMarketStats(stats, market);
     }
+    timings.totalMs = Date.now() - totalStartedAt;
 
     return stats;
   }
@@ -331,23 +372,48 @@ export class MarketRepository {
     return ids;
   }
 
-  private async syncEventTags(events: NormalizedEvent[], eventIds: Map<string, string>, tagIds: Map<string, string>) {
-    const rows = uniqueBy(events.flatMap((event) => event.tags.map((tag) => ({
-      event_id: eventIds.get(event.externalEventId),
-      tag_id: tagIds.get(tag.slug)
-    }))).filter((row): row is { event_id: string; tag_id: string } => Boolean(row.event_id && row.tag_id)), (row) => `${row.event_id}:${row.tag_id}`);
-    for (const batch of chunked(rows)) await this.sql`insert into event_tags ${this.sql(batch)} on conflict (event_id, tag_id) do nothing`;
+  private relationshipCounters(candidateRows: number, uniqueRows: number): RelationshipSyncCounters {
+    return {
+      candidateRows,
+      uniqueRows,
+      batchSize: this.relationshipSyncBatchSize,
+      batches: Math.ceil(uniqueRows / this.relationshipSyncBatchSize)
+    };
   }
 
-  private async syncMarketCategories(markets: NormalizedMarket[], marketIds: Map<string, string>, categoryIds: Map<string, string>) {
-    const rows = markets.map((market) => ({
-      market_id: marketIds.get(market.externalMarketId)!,
-      category_id: categoryIds.get(market.categorySlug)!,
+  private addRelationshipCounters(timings: Record<string, number>, prefix: string, counters: RelationshipSyncCounters) {
+    timings[`${prefix}CandidateRows`] = counters.candidateRows;
+    timings[`${prefix}UniqueRows`] = counters.uniqueRows;
+    timings[`${prefix}BatchSize`] = counters.batchSize;
+    timings[`${prefix}Batches`] = counters.batches;
+  }
+
+  private async syncEventTags(events: NormalizedEvent[], eventIds: Map<string, string>, tagIds: Map<string, string>): Promise<RelationshipSyncCounters> {
+    const candidates = events.flatMap((event) => event.tags.map((tag) => ({
+      event_id: eventIds.get(event.externalEventId),
+      tag_id: tagIds.get(tag.slug)
+    })));
+    const rows = uniqueBy(candidates.filter((row): row is { event_id: string; tag_id: string } => Boolean(row.event_id && row.tag_id)), (row) => `${row.event_id}:${row.tag_id}`);
+    for (const batch of chunked(rows, this.relationshipSyncBatchSize)) await this.sql`insert into event_tags ${this.sql(batch)} on conflict (event_id, tag_id) do nothing`;
+    return this.relationshipCounters(candidates.length, rows.length);
+  }
+
+  private async syncMarketCategories(markets: NormalizedMarket[], marketIds: Map<string, string>, categoryIds: Map<string, string>): Promise<RelationshipSyncCounters> {
+    const candidates = markets.map((market) => ({
+      market_id: marketIds.get(market.externalMarketId),
+      category_id: categoryIds.get(market.categorySlug),
       is_primary: true,
       source: market.categorySource,
       confidence: market.categoryConfidence
     }));
-    for (const batch of chunked(rows)) {
+    const rows = uniqueBy(candidates.filter((row): row is {
+      market_id: string;
+      category_id: string;
+      is_primary: boolean;
+      source: NormalizedMarket["categorySource"];
+      confidence: number;
+    } => Boolean(row.market_id && row.category_id)), (row) => `${row.market_id}:${row.category_id}:${row.source}`);
+    for (const batch of chunked(rows, this.relationshipSyncBatchSize)) {
       const marketIdsForBatch = batch.map((row) => row.market_id);
       await this.sql`update market_categories set is_primary = false where market_id in ${this.sql(marketIdsForBatch)} and is_primary = true`;
       await this.sql`
@@ -356,41 +422,55 @@ export class MarketRepository {
           is_primary = excluded.is_primary, confidence = excluded.confidence
       `;
     }
+    return this.relationshipCounters(candidates.length, rows.length);
   }
 
-  private async syncMarketTags(markets: NormalizedMarket[], marketIds: Map<string, string>, tagIds: Map<string, string>) {
-    const rows = uniqueBy(markets.flatMap((market) => market.tags.map((tag) => ({
+  private async syncMarketTags(markets: NormalizedMarket[], marketIds: Map<string, string>, tagIds: Map<string, string>): Promise<RelationshipSyncCounters> {
+    const candidates = markets.flatMap((market) => market.tags.map((tag) => ({
       market_id: marketIds.get(market.externalMarketId),
       tag_id: tagIds.get(tag.slug),
       source: market.categorySource
-    }))).filter((row): row is { market_id: string; tag_id: string; source: NormalizedMarket["categorySource"] } => Boolean(row.market_id && row.tag_id)), (row) => `${row.market_id}:${row.tag_id}:${row.source}`);
-    for (const batch of chunked(rows)) await this.sql`insert into market_tags ${this.sql(batch)} on conflict (market_id, tag_id, source) do nothing`;
+    })));
+    const rows = uniqueBy(candidates.filter((row): row is { market_id: string; tag_id: string; source: NormalizedMarket["categorySource"] } => Boolean(row.market_id && row.tag_id)), (row) => `${row.market_id}:${row.tag_id}:${row.source}`);
+    for (const batch of chunked(rows, this.relationshipSyncBatchSize)) await this.sql`insert into market_tags ${this.sql(batch)} on conflict (market_id, tag_id, source) do nothing`;
+    return this.relationshipCounters(candidates.length, rows.length);
   }
 
-  private async syncOutcomes(markets: NormalizedMarket[], marketIds: Map<string, string>) {
-    const rows = uniqueBy(markets.flatMap((market) => market.outcomes.map((outcome) => ({
-      market_id: marketIds.get(market.externalMarketId)!,
+  private async syncOutcomes(markets: NormalizedMarket[], marketIds: Map<string, string>): Promise<RelationshipSyncCounters> {
+    const candidates = markets.flatMap((market) => market.outcomes.map((outcome) => ({
+      market_id: marketIds.get(market.externalMarketId),
       outcome_name: outcome.name,
       external_token_id: outcome.externalTokenId,
       probability: outcome.probability,
       volume: outcome.volume,
       rank: outcome.rank
-    }))), (row) => `${row.market_id}:${row.outcome_name}`);
-    for (const batch of chunked(rows)) await this.sql`
+    })));
+    const rows = uniqueBy(candidates.filter((row): row is {
+      market_id: string;
+      outcome_name: string;
+      external_token_id: string | null;
+      probability: number | null;
+      volume: number;
+      rank: number;
+    } => Boolean(row.market_id)), (row) => `${row.market_id}:${row.outcome_name}`);
+    for (const batch of chunked(rows, this.relationshipSyncBatchSize)) await this.sql`
       insert into market_outcomes ${this.sql(batch)}
       on conflict (market_id, outcome_name) do update set
         external_token_id = excluded.external_token_id,
         probability = excluded.probability, volume = excluded.volume,
         rank = excluded.rank, updated_at = now()
     `;
+    return this.relationshipCounters(candidates.length, rows.length);
   }
 
-  private async syncEventMarkets(events: NormalizedEvent[], eventIds: Map<string, string>, marketIds: Map<string, string>) {
-    const rows = uniqueBy(events.flatMap((event) => event.markets.map((market) => ({
-      event_id: eventIds.get(event.externalEventId)!,
-      market_id: marketIds.get(market.externalMarketId)!
-    }))), (row) => `${row.event_id}:${row.market_id}`);
-    for (const batch of chunked(rows)) await this.sql`insert into event_markets ${this.sql(batch)} on conflict (event_id, market_id) do nothing`;
+  private async syncEventMarkets(events: NormalizedEvent[], eventIds: Map<string, string>, marketIds: Map<string, string>): Promise<RelationshipSyncCounters> {
+    const candidates = events.flatMap((event) => event.markets.map((market) => ({
+      event_id: eventIds.get(event.externalEventId),
+      market_id: marketIds.get(market.externalMarketId)
+    })));
+    const rows = uniqueBy(candidates.filter((row): row is { event_id: string; market_id: string } => Boolean(row.event_id && row.market_id)), (row) => `${row.event_id}:${row.market_id}`);
+    for (const batch of chunked(rows, this.relationshipSyncBatchSize)) await this.sql`insert into event_markets ${this.sql(batch)} on conflict (event_id, market_id) do nothing`;
+    return this.relationshipCounters(candidates.length, rows.length);
   }
 
   private addMarketStats(stats: SyncStats, market: NormalizedMarket) {

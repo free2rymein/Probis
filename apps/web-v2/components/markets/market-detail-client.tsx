@@ -14,17 +14,42 @@ import { MarketOutcomeRow } from "./market-outcome-row";
 type Tab = "overview" | "probability" | "volume" | "open-interest" | "outcomes";
 const tabs: Array<{ id: Tab; label: string }> = [{ id: "overview", label: "Overview" }, { id: "probability", label: "Probability" }, { id: "volume", label: "Volume" }, { id: "open-interest", label: "Open Interest" }, { id: "outcomes", label: "Outcomes" }];
 
-export function MarketDetailClient({ id }: { id: string }) {
-  const [market, setMarket] = useState<MarketListItem | null>(null);
-  const [history, setHistory] = useState<MarketHistoryPoint[]>([]);
+export function MarketDetailClient({
+  id,
+  initialMarket = null,
+  initialHistory = null
+}: {
+  id: string;
+  initialMarket?: MarketListItem | null;
+  initialHistory?: MarketHistoryPoint[] | null;
+}) {
+  const hasInitialMarket = initialMarket?.id === id;
+  const [market, setMarket] = useState<MarketListItem | null>(hasInitialMarket ? initialMarket : null);
+  const [history, setHistory] = useState<MarketHistoryPoint[]>(initialHistory ?? []);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!hasInitialMarket);
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    if (initialMarket?.id === id) {
+      setMarket(initialMarket);
+      setHistory(initialHistory ?? []);
+      setLoading(false);
+      setError(false);
+
+      if (initialHistory === null) {
+        void explorerApi.history(id).then(setHistory).catch(() => setHistory([]));
+      }
+      return;
+    }
+
     setLoading(true);
-    void Promise.all([explorerApi.market(id), explorerApi.history(id).catch(() => [])]).then(([detail, points]) => { setMarket(detail); setHistory(points); }).catch(() => setError(true)).finally(() => setLoading(false));
-  }, [id]);
+    setError(false);
+    void Promise.all([
+      explorerApi.market(id),
+      initialHistory === null ? explorerApi.history(id).catch(() => []) : Promise.resolve(initialHistory)
+    ]).then(([detail, points]) => { setMarket(detail); setHistory(points); }).catch(() => setError(true)).finally(() => setLoading(false));
+  }, [id, initialMarket, initialHistory]);
 
   if (loading) return <DetailSkeleton />;
   if (error || !market) return <main className="min-h-screen"><AppHeader /><div className="mx-auto max-w-5xl px-4 py-16 text-center"><h1 className="text-xl font-bold">Market unavailable</h1><p className="mt-2 text-sm text-muted-foreground">This market could not be loaded from the explorer API.</p><Link href="/markets" className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-yes"><ArrowLeft size={15} /> Back to markets</Link></div></main>;

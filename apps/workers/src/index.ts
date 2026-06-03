@@ -18,7 +18,7 @@ if (existsSync(packageEnvPath)) loadEnv({ path: packageEnvPath, override: true }
 const config = loadWorkerConfig();
 const { sql, close } = createWorkerDatabase(config);
 const client = new PolymarketClient(config);
-const repository = new MarketRepository(sql);
+const repository = new MarketRepository(sql, { relationshipSyncBatchSize: config.RELATIONSHIP_SYNC_BATCH_SIZE });
 const lifecycleReconciliation = new LifecycleReconciliationWorker(config, client, repository);
 const discovery = new MarketDiscoveryWorker(config, client, repository, lifecycleReconciliation);
 const snapshots = new MarketSnapshotWorker(config, client, repository);

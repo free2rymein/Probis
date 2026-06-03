@@ -17,7 +17,7 @@ const { sql, close } = createWorkerDatabase(config);
 
 try {
   const client = new PolymarketClient(config);
-  const repository = new MarketRepository(sql);
+  const repository = new MarketRepository(sql, { relationshipSyncBatchSize: config.RELATIONSHIP_SYNC_BATCH_SIZE });
   await new LifecycleReconciliationWorker(config, client, repository).runOnce();
 } finally {
   await close();

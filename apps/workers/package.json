@@ -14,6 +14,7 @@
     "staging:refresh": "tsx src/run-staging-refresh-once.ts",
     "staging:cleanup": "tsx src/run-staging-cleanup-once.ts",
     "staging:normalize": "tsx src/run-staging-normalize-once.ts",
+    "compare:normalization-parity": "tsx src/compare-normalization-parity.ts",
     "explorer-cards:refresh": "tsx src/run-explorer-card-refresh-once.ts",
     "pipeline:once": "tsx src/run-full-pipeline-once.ts",
     "build": "tsc --noEmit",

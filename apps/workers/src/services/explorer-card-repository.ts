@@ -8,6 +8,7 @@ export type ExplorerCardRefreshStats = {
   hiddenOrExcludedCards: number;
   hiddenFromNewCards: number;
   durationMs: number;
+  timingBreakdown: Record<string, number>;
 };
 
 export class ExplorerCardRepository {
@@ -19,10 +20,19 @@ export class ExplorerCardRepository {
   async refresh(): Promise<ExplorerCardRefreshStats> {
     const startedAt = Date.now();
     const stats = await this.sql.begin(async (transaction) => {
+      const timings: Record<string, number> = {};
+      const timed = async <T>(name: string, task: () => Promise<T>) => {
+        const phaseStartedAt = Date.now();
+        try {
+          return await task();
+        } finally {
+          timings[name] = Date.now() - phaseStartedAt;
+        }
+      };
       const [generation] = await transaction<{ id: string }[]>`select gen_random_uuid() as id`;
       if (!generation) throw new Error("Unable to generate explorer card refresh generation");
 
-      await transaction`
+      await timed("upsertCardsMs", () => transaction`
         insert into explorer_event_cards (
           event_id, external_event_id, venue_id, venue_slug, venue_name, event_slug, title, search_text,
           category_id, category_slug, category_name, tags, volume, volume_24h, liquidity, open_interest,
@@ -227,14 +237,14 @@ export class ExplorerCardRepository {
           exclusion_reasons = excluded.exclusion_reasons,
           refresh_generation = excluded.refresh_generation,
           refreshed_at = excluded.refreshed_at
-      `;
+      `);
 
-      await transaction`
+      await timed("deleteOldGenerationsMs", () => transaction`
         delete from explorer_event_cards
         where refresh_generation <> ${generation.id}
-      `;
+      `);
 
-      const [counts] = await transaction<{
+      const [counts] = await timed("countCardsMs", () => transaction<{
         cards_built: number;
         visible_cards: number;
         hidden_or_excluded_cards: number;
@@ -247,17 +257,19 @@ export class ExplorerCardRepository {
           count(*) filter (where hidden_from_new)::int as hidden_from_new_cards
         from explorer_event_cards
         where refresh_generation = ${generation.id}
-      `;
+      `);
 
       return {
         refreshGeneration: generation.id,
         cardsBuilt: counts?.cards_built ?? 0,
         visibleCards: counts?.visible_cards ?? 0,
         hiddenOrExcludedCards: counts?.hidden_or_excluded_cards ?? 0,
-        hiddenFromNewCards: counts?.hidden_from_new_cards ?? 0
+        hiddenFromNewCards: counts?.hidden_from_new_cards ?? 0,
+        timingBreakdown: timings
       };
     });
 
+    stats.timingBreakdown.totalMs = Date.now() - startedAt;
     return { ...stats, durationMs: Date.now() - startedAt };
   }
 }

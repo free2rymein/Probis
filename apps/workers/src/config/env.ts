@@ -28,6 +28,11 @@ export const workerConfigSchema = z.object({
   RAW_STAGING_KEEP_SUCCESSFUL_BATCHES: z.coerce.number().int().min(1).default(2),
   RAW_FAILED_STAGING_RETENTION_MINUTES: z.coerce.number().int().min(1).default(360),
   RAW_STAGING_CLEANUP_MODE: z.enum(["retain-latest", "truncate-after-success"]).default("retain-latest"),
+  RAW_STAGING_READ_PAGE_SIZE: z.coerce.number().int().min(50).max(2_000).default(250),
+  RAW_STAGING_WRITE_PAGE_SIZE: z.coerce.number().int().min(50).max(2_000).default(250),
+  RAW_STAGING_STATUS_UPDATE_BATCH_SIZE: z.coerce.number().int().min(100).max(5_000).default(1_000),
+  RELATIONSHIP_SYNC_BATCH_SIZE: z.coerce.number().int().min(100).max(5_000).default(1_000),
+  PIPELINE_NORMALIZATION_SOURCE: z.enum(["staging-db", "memory", "stored-procedure"]).default("staging-db"),
   INGESTION_BATCH_RETENTION_DAYS: z.coerce.number().int().min(1).default(7),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info")
 });

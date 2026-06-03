@@ -97,6 +97,13 @@ corepack pnpm --filter @probis/workers run pipeline:once
 After a development explorer reset, run the same `pipeline:once` command to
 rebuild staging, normalized explorer tables, and the read model.
 
+The lightweight API health endpoint checks database connectivity and reports
+the active events query mode:
+
+```bash
+curl http://localhost:3001/api/health
+```
+
 ## Development Workflow
 
 Use shared packages for reusable contracts and utilities. Keep feature-specific behavior inside the owning app until it is used by multiple surfaces.

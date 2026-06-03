@@ -114,6 +114,12 @@ If `explorer_event_cards` is empty or stale, rebuild the full pipeline:
 corepack pnpm --filter @probis/workers run pipeline:once
 ```
 
+Check basic API and database health:
+
+```bash
+curl http://localhost:3001/api/health
+```
+
 Raw Gamma staging payloads are useful when debugging failed normalization runs.
 By default, successful pipeline runs retain the latest successful raw batches:
 

@@ -47,7 +47,12 @@ const stageFeed = async (
     await repository.markBatchFetched(batchId, {
       eventCount: events.length,
       marketCount: markets.length,
-      timings: { fetchDurationMs, persistenceDurationMs, durationMs }
+      timings: {
+        fetchDurationMs,
+        rawStagingWritePageSize: config.RAW_STAGING_WRITE_PAGE_SIZE,
+        persistenceDurationMs,
+        durationMs
+      }
     });
     const cleanup = await repository.cleanupRawStaging({
       keepSuccessfulBatches: config.RAW_STAGING_KEEP_SUCCESSFUL_BATCHES,
@@ -63,6 +68,7 @@ const stageFeed = async (
       rawEventRowsSkipped: rawEvents.skipped,
       rawMarketRowsInserted: rawMarkets.inserted,
       rawMarketRowsSkipped: rawMarkets.skipped,
+      rawStagingWritePageSize: config.RAW_STAGING_WRITE_PAGE_SIZE,
       cleanupRawEventRowsDeleted: cleanup.rawEventsDeleted,
       cleanupRawMarketRowsDeleted: cleanup.rawMarketsDeleted,
       cleanupAffectedBatches: cleanup.affectedBatches,
@@ -84,7 +90,11 @@ const stageFeed = async (
 
 try {
   const client = new PolymarketClient(config);
-  const repository = new StagingRepository(sql);
+  const repository = new StagingRepository(sql, {
+    readPageSize: config.RAW_STAGING_READ_PAGE_SIZE,
+    writePageSize: config.RAW_STAGING_WRITE_PAGE_SIZE,
+    statusUpdateBatchSize: config.RAW_STAGING_STATUS_UPDATE_BATCH_SIZE
+  });
   await stageFeed(repository, "open_events", () => client.fetchActiveEvents());
   await stageFeed(repository, "closed_events", () => client.fetchClosedEvents());
 } finally {

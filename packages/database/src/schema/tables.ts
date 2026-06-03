@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { boolean, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 export const venues = pgTable("venues", {
@@ -351,6 +351,12 @@ export const gammaRawEvents = pgTable(
     externalEventIdx: index("gamma_raw_events_external_event_id_idx").on(table.externalEventId),
     normalizationStatusIdx: index("gamma_raw_events_normalization_status_idx").on(table.normalizationStatus),
     createdAtIdx: index("gamma_raw_events_created_at_idx").on(table.createdAt),
+    pendingBatchCreatedIdIdx: index("gamma_raw_events_pending_batch_created_id_idx")
+      .on(table.batchId, table.createdAt, table.id)
+      .where(sql`${table.normalizationStatus} = 'pending'`),
+    pendingBatchIdIdx: index("gamma_raw_events_pending_batch_id_idx")
+      .on(table.batchId, table.id)
+      .where(sql`${table.normalizationStatus} = 'pending'`),
     batchFeedEventUnique: uniqueIndex("gamma_raw_events_batch_feed_event_unique").on(
       table.batchId,
       table.feedKind,
@@ -383,6 +389,12 @@ export const gammaRawMarkets = pgTable(
     externalMarketIdx: index("gamma_raw_markets_external_market_id_idx").on(table.externalMarketId),
     normalizationStatusIdx: index("gamma_raw_markets_normalization_status_idx").on(table.normalizationStatus),
     createdAtIdx: index("gamma_raw_markets_created_at_idx").on(table.createdAt),
+    pendingBatchCreatedIdIdx: index("gamma_raw_markets_pending_batch_created_id_idx")
+      .on(table.batchId, table.createdAt, table.id)
+      .where(sql`${table.normalizationStatus} = 'pending'`),
+    pendingBatchIdIdx: index("gamma_raw_markets_pending_batch_id_idx")
+      .on(table.batchId, table.id)
+      .where(sql`${table.normalizationStatus} = 'pending'`),
     batchFeedMarketUnique: uniqueIndex("gamma_raw_markets_batch_feed_market_unique").on(
       table.batchId,
       table.feedKind,

@@ -24,10 +24,18 @@ if (batchIdArgumentIndex >= 0 && !batchId) throw new Error("--batch-id requires 
 const { sql, close } = createWorkerDatabase(config);
 
 try {
-  const service = new StagingNormalizationService(sql, new MarketRepository(sql));
+  const service = new StagingNormalizationService(sql, new MarketRepository(sql, {
+    relationshipSyncBatchSize: config.RELATIONSHIP_SYNC_BATCH_SIZE
+  }), {
+    readPageSize: config.RAW_STAGING_READ_PAGE_SIZE,
+    writePageSize: config.RAW_STAGING_WRITE_PAGE_SIZE,
+    statusUpdateBatchSize: config.RAW_STAGING_STATUS_UPDATE_BATCH_SIZE,
+    cleanupMode: config.RAW_STAGING_CLEANUP_MODE
+  });
   const stats = await service.normalizeLatestOpenEvents(batchId);
   logger.info("staging_normalization.complete", {
     ...stats,
+    timingBreakdown: JSON.stringify(stats.timingBreakdown),
     status: "normalized"
   });
 } finally {

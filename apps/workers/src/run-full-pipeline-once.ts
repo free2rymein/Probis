@@ -7,7 +7,7 @@ import { ExplorerCardRepository } from "./services/explorer-card-repository";
 import { MarketRepository } from "./services/market-repository";
 import type { GammaEvent } from "./services/polymarket";
 import { PolymarketClient } from "./services/polymarket";
-import { StagingNormalizationService } from "./services/staging-normalization";
+import { StagingNormalizationService, type StagingNormalizationStats } from "./services/staging-normalization";
 import { StagingRepository, type GammaFeedKind, type RawInsertStats } from "./services/staging-repository";
 import { logger } from "./utils/logger";
 
@@ -22,13 +22,31 @@ const PIPELINE_ACTIVE_WINDOW_MINUTES = 30;
 type StagedFeedStats = {
   batchId: string;
   feedKind: GammaFeedKind;
+  events: GammaEvent[];
   eventsFetched: number;
   marketsFetched: number;
   rawEvents: RawInsertStats;
   rawMarkets: RawInsertStats;
   fetchDurationMs: number;
+  rawEventInsertDurationMs: number;
+  rawMarketInsertDurationMs: number;
+  writePageSize: number;
   persistenceDurationMs: number;
   durationMs: number;
+};
+
+type StoredProcedureSummary = {
+  events_seen?: number;
+  events_upserted?: number;
+  events_excluded?: number;
+  markets_seen?: number;
+  markets_upserted?: number;
+  markets_excluded?: number;
+  outcomes_upserted?: number;
+  event_markets_upserted?: number;
+  market_categories_upserted?: number;
+  duration_ms?: number;
+  limitation_notes?: string[];
 };
 
 const flattenMarkets = (events: GammaEvent[]) =>
@@ -39,13 +57,18 @@ const flattenMarkets = (events: GammaEvent[]) =>
 
 const stageFeed = async (
   repository: StagingRepository,
+  writePageSize: number,
   feedKind: GammaFeedKind,
   fetchEvents: () => Promise<GammaEvent[]>
 ): Promise<StagedFeedStats> => {
   const startedAt = Date.now();
   const batchId = await repository.createGammaIngestionBatch({
     feedKind,
-    metadata: { mode: "stage-normalize", command: "pipeline:once" }
+    metadata: {
+      mode: "stage-normalize",
+      command: "pipeline:once",
+      normalizationSource: config.PIPELINE_NORMALIZATION_SOURCE
+    }
   });
   logger.info("full_pipeline.staging_feed.start", { batchId, feedKind });
   try {
@@ -54,25 +77,45 @@ const stageFeed = async (
     const fetchDurationMs = Date.now() - fetchStartedAt;
     const markets = flattenMarkets(events);
     const persistenceStartedAt = Date.now();
+    let rawEventInsertDurationMs = 0;
+    let rawMarketInsertDurationMs = 0;
     const [rawEvents, rawMarkets] = await Promise.all([
-      repository.insertRawEvents(batchId, feedKind, events),
-      repository.insertRawMarkets(batchId, feedKind, markets)
+      (async () => {
+        const startedAt = Date.now();
+        try {
+          return await repository.insertRawEvents(batchId, feedKind, events);
+        } finally {
+          rawEventInsertDurationMs = Date.now() - startedAt;
+        }
+      })(),
+      (async () => {
+        const startedAt = Date.now();
+        try {
+          return await repository.insertRawMarkets(batchId, feedKind, markets);
+        } finally {
+          rawMarketInsertDurationMs = Date.now() - startedAt;
+        }
+      })()
     ]);
     const persistenceDurationMs = Date.now() - persistenceStartedAt;
     const durationMs = Date.now() - startedAt;
     await repository.markBatchFetched(batchId, {
       eventCount: events.length,
       marketCount: markets.length,
-      timings: { fetchDurationMs, persistenceDurationMs, durationMs }
+      timings: { fetchDurationMs, rawEventInsertDurationMs, rawMarketInsertDurationMs, writePageSize, persistenceDurationMs, durationMs }
     });
     const stats = {
       batchId,
       feedKind,
+      events,
       eventsFetched: events.length,
       marketsFetched: markets.length,
       rawEvents,
       rawMarkets,
       fetchDurationMs,
+      rawEventInsertDurationMs,
+      rawMarketInsertDurationMs,
+      writePageSize,
       persistenceDurationMs,
       durationMs
     };
@@ -86,6 +129,9 @@ const stageFeed = async (
       rawMarketRowsInserted: rawMarkets.inserted,
       rawMarketRowsSkipped: rawMarkets.skipped,
       fetchDurationMs,
+      rawEventInsertDurationMs,
+      rawMarketInsertDurationMs,
+      writePageSize,
       persistenceDurationMs,
       durationMs
     });
@@ -116,7 +162,8 @@ try {
       insert into gamma_ingestion_batches (feed_kind, status, metadata)
       select 'full_pipeline', 'started', ${transaction.json({
         command: "pipeline:once",
-        normalizationMode: "stage-normalize"
+        normalizationMode: "stage-normalize",
+        normalizationSource: config.PIPELINE_NORMALIZATION_SOURCE
       })}
       where not exists (
         select 1
@@ -135,16 +182,24 @@ try {
   logger.info("full_pipeline.start", {
     pipelineRunId,
     normalizationMode: "stage-normalize",
+    normalizationSource: config.PIPELINE_NORMALIZATION_SOURCE,
     configuredDefaultIngestionMode: config.GAMMA_INGESTION_MODE
   });
 
   const client = new PolymarketClient(config);
-  const staging = new StagingRepository(sql);
+  const staging = new StagingRepository(sql, {
+    readPageSize: config.RAW_STAGING_READ_PAGE_SIZE,
+    writePageSize: config.RAW_STAGING_WRITE_PAGE_SIZE,
+    statusUpdateBatchSize: config.RAW_STAGING_STATUS_UPDATE_BATCH_SIZE
+  });
 
   const stagingStartedAt = Date.now();
-  logger.info("full_pipeline.staging_refresh.start", {});
-  const openFeed = await stageFeed(staging, "open_events", () => client.fetchActiveEvents());
-  const closedFeed = await stageFeed(staging, "closed_events", () => client.fetchClosedEvents());
+  logger.info("full_pipeline.staging_refresh.start", {
+    rawStagingReadPageSize: config.RAW_STAGING_READ_PAGE_SIZE,
+    rawStagingWritePageSize: config.RAW_STAGING_WRITE_PAGE_SIZE
+  });
+  const openFeed = await stageFeed(staging, config.RAW_STAGING_WRITE_PAGE_SIZE, "open_events", () => client.fetchActiveEvents());
+  const closedFeed = await stageFeed(staging, config.RAW_STAGING_WRITE_PAGE_SIZE, "closed_events", () => client.fetchClosedEvents());
   logger.info("full_pipeline.staging_refresh.complete", {
     openBatchId: openFeed.batchId,
     closedBatchId: closedFeed.batchId,
@@ -158,12 +213,60 @@ try {
   const normalizationStartedAt = Date.now();
   logger.info("full_pipeline.staging_normalization.start", {
     batchId: openFeed.batchId,
-    normalizationMode: "stage-normalize"
+    normalizationMode: "stage-normalize",
+    normalizationSource: config.PIPELINE_NORMALIZATION_SOURCE,
+    relationshipSyncBatchSize: config.RELATIONSHIP_SYNC_BATCH_SIZE,
+    rawStagingStatusUpdateBatchSize: config.RAW_STAGING_STATUS_UPDATE_BATCH_SIZE,
+    cleanupMode: config.RAW_STAGING_CLEANUP_MODE
   });
-  const normalization = await new StagingNormalizationService(sql, new MarketRepository(sql))
-    .normalizeLatestOpenEvents(openFeed.batchId);
+  const normalizationService = new StagingNormalizationService(sql, new MarketRepository(sql, {
+    relationshipSyncBatchSize: config.RELATIONSHIP_SYNC_BATCH_SIZE
+  }), {
+    readPageSize: config.RAW_STAGING_READ_PAGE_SIZE,
+    writePageSize: config.RAW_STAGING_WRITE_PAGE_SIZE,
+    statusUpdateBatchSize: config.RAW_STAGING_STATUS_UPDATE_BATCH_SIZE,
+    cleanupMode: config.RAW_STAGING_CLEANUP_MODE
+  });
+  let normalization: StagingNormalizationStats;
+  if (config.PIPELINE_NORMALIZATION_SOURCE === "stored-procedure") {
+    const [procedureResult] = await sql<{ summary: StoredProcedureSummary }[]>`
+      select probis2_normalize_gamma_open_batch_prototype(${openFeed.batchId}) as summary
+    `;
+    const summary = procedureResult?.summary;
+    if (!summary) throw new Error("Stored-procedure normalization returned no summary");
+    normalization = {
+      batchId: openFeed.batchId,
+      fetchedRawMarketCount: openFeed.marketsFetched,
+      insertedRawEventRows: openFeed.rawEvents.inserted,
+      insertedRawMarketRows: openFeed.rawMarkets.inserted,
+      skippedOrDuplicateRawMarketCount: Math.max(0, openFeed.marketsFetched - openFeed.rawMarkets.inserted),
+      normalizedEvents: Number(summary.events_upserted ?? 0),
+      normalizedMarkets: Number(summary.markets_upserted ?? 0),
+      excludedEvents: Number(summary.events_excluded ?? 0),
+      excludedMarkets: Number(summary.markets_excluded ?? 0),
+      failedRows: 0,
+      durationMs: Number(summary.duration_ms ?? 0),
+      timingBreakdown: {
+        normalizationSource: "stored-procedure",
+        storedProcedureSummary: summary,
+        limitationNotes: summary.limitation_notes ?? []
+      }
+    };
+  } else if (config.PIPELINE_NORMALIZATION_SOURCE === "memory") {
+    normalization = await normalizationService.normalizeOpenEventsFromMemory({
+      batchId: openFeed.batchId,
+      events: openFeed.events,
+      insertedRawEventRows: openFeed.rawEvents.inserted,
+      insertedRawMarketRows: openFeed.rawMarkets.inserted,
+      fetchedRawMarketCount: openFeed.marketsFetched
+    });
+  } else {
+    normalization = await normalizationService.normalizeLatestOpenEvents(openFeed.batchId);
+  }
   logger.info("full_pipeline.staging_normalization.complete", {
     ...normalization,
+    normalizationSource: config.PIPELINE_NORMALIZATION_SOURCE,
+    timingBreakdown: JSON.stringify(normalization.timingBreakdown),
     durationMs: Date.now() - normalizationStartedAt
   });
 
@@ -172,6 +275,7 @@ try {
   const cards = await new ExplorerCardRepository(sql, config).refresh();
   logger.info("full_pipeline.explorer_cards_refresh.complete", {
     ...cards,
+    timingBreakdown: JSON.stringify(cards.timingBreakdown),
     durationMs: Date.now() - cardRefreshStartedAt
   });
 
@@ -222,6 +326,11 @@ try {
     cardsBuilt: cards.cardsBuilt,
     visibleCards: cards.visibleCards,
     cleanupMode,
+    normalizationSource: config.PIPELINE_NORMALIZATION_SOURCE,
+    rawStagingReadPageSize: config.RAW_STAGING_READ_PAGE_SIZE,
+    rawStagingWritePageSize: config.RAW_STAGING_WRITE_PAGE_SIZE,
+    rawStagingStatusUpdateBatchSize: config.RAW_STAGING_STATUS_UPDATE_BATCH_SIZE,
+    relationshipSyncBatchSize: config.RELATIONSHIP_SYNC_BATCH_SIZE,
     rawEventsDeleted: cleanup.rawEventsDeleted,
     rawMarketsDeleted: cleanup.rawMarketsDeleted,
     durationMs: Date.now() - startedAt

@@ -4,7 +4,11 @@ import type { GammaEvent, GammaMarket, GammaTag } from "./polymarket";
 const chunked = <T>(items: T[], size = 250) =>
   Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size));
 
-const RAW_STAGING_READ_PAGE_SIZE = 250;
+const DEFAULT_RAW_STAGING_PAGE_SIZE = 250;
+const normalizedPageSize = (value: number | undefined): number => {
+  if (value === undefined) return DEFAULT_RAW_STAGING_PAGE_SIZE;
+  return Number.isInteger(value) && value >= 50 ? value : DEFAULT_RAW_STAGING_PAGE_SIZE;
+};
 
 const dateOrNull = (value: string | undefined) => {
   if (!value) return null;
@@ -160,6 +164,47 @@ export type RawInsertStats = {
   skipped: number;
 };
 
+export type RawReadStats = {
+  paginationMode: "keyset-id";
+  pageSize: number;
+  pages: number;
+  rows: number;
+  totalDurationMs: number;
+  averagePageDurationMs: number;
+  maxPageDurationMs: number;
+  selectedColumns: string[];
+};
+
+export type RawReadResult<T> = {
+  rows: T[];
+  stats: RawReadStats;
+};
+
+export type RawStatusUpdateRow = {
+  id: string;
+  status: "normalized" | "excluded" | "failed";
+  exclusionReasons?: string[];
+  errorMessage?: string | null;
+};
+
+export type RawEventStatusUpdateByExternalIdRow = Omit<RawStatusUpdateRow, "id"> & {
+  externalEventId: string;
+};
+
+export type RawMarketStatusUpdateByExternalIdRow = Omit<RawStatusUpdateRow, "id"> & {
+  externalMarketId: string;
+};
+
+export type RawStatusUpdateStats = {
+  rowsUpdated: number;
+  skippedRows: number;
+  failedRows: number;
+  groups: number;
+  statements: number;
+  batchSize: number;
+  mode: "grouped-bulk";
+};
+
 export type RawCleanupStats = {
   rawEventsDeleted: number;
   rawMarketsDeleted: number;
@@ -173,7 +218,18 @@ export type RawCleanupPolicy = {
 };
 
 export class StagingRepository {
-  constructor(private readonly sql: postgres.Sql) {}
+  private readonly readPageSize: number;
+  private readonly writePageSize: number;
+  private readonly statusUpdateBatchSize: number;
+
+  constructor(
+    private readonly sql: postgres.Sql,
+    options: { readPageSize?: number; writePageSize?: number; statusUpdateBatchSize?: number } = {}
+  ) {
+    this.readPageSize = normalizedPageSize(options.readPageSize);
+    this.writePageSize = normalizedPageSize(options.writePageSize);
+    this.statusUpdateBatchSize = normalizedPageSize(options.statusUpdateBatchSize);
+  }
 
   async createGammaIngestionBatch({
     feedKind,
@@ -260,7 +316,7 @@ export class StagingRepository {
       source_updated_at: dateOrNull(event.updatedAt)
     }] : []);
     let inserted = 0;
-    for (const batch of chunked(rows)) {
+    for (const batch of chunked(rows, this.writePageSize)) {
       const persisted = await this.sql<{ id: string }[]>`
         insert into gamma_raw_events (
           batch_id, feed_kind, external_event_id, payload, source_updated_at
@@ -302,7 +358,7 @@ export class StagingRepository {
       }] : [];
     });
     let inserted = 0;
-    for (const batch of chunked(rows)) {
+    for (const batch of chunked(rows, this.writePageSize)) {
       const persisted = await this.sql<{ id: string }[]>`
         insert into gamma_raw_markets (
           batch_id, feed_kind, external_event_id, external_market_id, payload, source_updated_at
@@ -398,10 +454,32 @@ export class StagingRepository {
   }
 
   async getPendingRawEvents(batchId: string) {
-    const rows: RawStagedEvent[] = [];
+    const result = await this.getPendingRawEventsWithStats(batchId);
+    return result.rows;
+  }
 
-    for (let offset = 0; ; offset += RAW_STAGING_READ_PAGE_SIZE) {
-      const page = await this.sql<RawStagedEvent[]>`
+  async getRawEventsForBatch(batchId: string): Promise<RawStagedEvent[]> {
+    return this.sql<RawStagedEvent[]>`
+      select
+        id,
+        external_event_id as "externalEventId",
+        payload
+      from gamma_raw_events
+      where batch_id = ${batchId}
+      order by id
+    `;
+  }
+
+  async getPendingRawEventsWithStats(batchId: string): Promise<RawReadResult<RawStagedEvent>> {
+    const rows: RawStagedEvent[] = [];
+    const pageDurations: number[] = [];
+    const startedAt = Date.now();
+    const selectedColumns = ["id", "external_event_id", "payload"];
+    let lastId: string | null = null;
+
+    for (;;) {
+      const pageStartedAt = Date.now();
+      const page: RawStagedEvent[] = await this.sql<RawStagedEvent[]>`
         select
           id,
           external_event_id as "externalEventId",
@@ -409,24 +487,68 @@ export class StagingRepository {
         from gamma_raw_events
         where batch_id = ${batchId}
           and normalization_status = 'pending'
-        order by created_at, external_event_id
-        limit ${RAW_STAGING_READ_PAGE_SIZE}
-        offset ${offset}
+          and (${lastId}::uuid is null or id > ${lastId}::uuid)
+        order by id
+        limit ${this.readPageSize}
       `;
+      pageDurations.push(Date.now() - pageStartedAt);
 
       rows.push(...page);
 
-      if (page.length < RAW_STAGING_READ_PAGE_SIZE) {
-        return rows;
+      const lastRow: RawStagedEvent | undefined = page[page.length - 1];
+      if (lastRow) {
+        lastId = lastRow.id;
+      }
+
+      if (page.length < this.readPageSize) {
+        const totalDurationMs = Date.now() - startedAt;
+        return {
+          rows,
+          stats: {
+            paginationMode: "keyset-id",
+            pageSize: this.readPageSize,
+            pages: pageDurations.length,
+            rows: rows.length,
+            totalDurationMs,
+            averagePageDurationMs: pageDurations.length === 0
+              ? 0
+              : Number((pageDurations.reduce((total, duration) => total + duration, 0) / pageDurations.length).toFixed(1)),
+            maxPageDurationMs: Math.max(0, ...pageDurations),
+            selectedColumns
+          }
+        };
       }
     }
   }
 
   async getPendingRawMarkets(batchId: string) {
-    const rows: RawStagedMarket[] = [];
+    const result = await this.getPendingRawMarketsWithStats(batchId);
+    return result.rows;
+  }
 
-    for (let offset = 0; ; offset += RAW_STAGING_READ_PAGE_SIZE) {
-      const page = await this.sql<RawStagedMarket[]>`
+  async getRawMarketsForBatch(batchId: string): Promise<RawStagedMarket[]> {
+    return this.sql<RawStagedMarket[]>`
+      select
+        id,
+        external_event_id as "externalEventId",
+        external_market_id as "externalMarketId",
+        payload
+      from gamma_raw_markets
+      where batch_id = ${batchId}
+      order by id
+    `;
+  }
+
+  async getPendingRawMarketsWithStats(batchId: string): Promise<RawReadResult<RawStagedMarket>> {
+    const rows: RawStagedMarket[] = [];
+    const pageDurations: number[] = [];
+    const startedAt = Date.now();
+    const selectedColumns = ["id", "external_event_id", "external_market_id", "payload"];
+    let lastId: string | null = null;
+
+    for (;;) {
+      const pageStartedAt = Date.now();
+      const page: RawStagedMarket[] = await this.sql<RawStagedMarket[]>`
         select
           id,
           external_event_id as "externalEventId",
@@ -435,77 +557,168 @@ export class StagingRepository {
         from gamma_raw_markets
         where batch_id = ${batchId}
           and normalization_status = 'pending'
-        order by created_at, external_market_id
-        limit ${RAW_STAGING_READ_PAGE_SIZE}
-        offset ${offset}
+          and (${lastId}::uuid is null or id > ${lastId}::uuid)
+        order by id
+        limit ${this.readPageSize}
       `;
+      pageDurations.push(Date.now() - pageStartedAt);
 
       rows.push(...page);
 
-      if (page.length < RAW_STAGING_READ_PAGE_SIZE) {
-        return rows;
+      const lastRow: RawStagedMarket | undefined = page[page.length - 1];
+      if (lastRow) {
+        lastId = lastRow.id;
+      }
+
+      if (page.length < this.readPageSize) {
+        const totalDurationMs = Date.now() - startedAt;
+        return {
+          rows,
+          stats: {
+            paginationMode: "keyset-id",
+            pageSize: this.readPageSize,
+            pages: pageDurations.length,
+            rows: rows.length,
+            totalDurationMs,
+            averagePageDurationMs: pageDurations.length === 0
+              ? 0
+              : Number((pageDurations.reduce((total, duration) => total + duration, 0) / pageDurations.length).toFixed(1)),
+            maxPageDurationMs: Math.max(0, ...pageDurations),
+            selectedColumns
+          }
+        };
       }
     }
   }
 
-  async markRawEvents(rows: Array<{
-    id: string;
-    status: "normalized" | "excluded" | "failed";
-    exclusionReasons?: string[];
-    errorMessage?: string | null;
-  }>) {
-    for (const batch of chunked(rows)) {
-      if (batch.length === 0) continue;
-      await this.sql`
-        update gamma_raw_events raw set
-          normalization_status = incoming.status,
-          exclusion_reasons = incoming.exclusion_reasons,
-          error_message = incoming.error_message,
-          normalized_at = now()
-        from jsonb_to_recordset(${this.sql.json(batch.map((row) => ({
-          id: row.id,
-          status: row.status,
-          exclusion_reasons: row.exclusionReasons ?? [],
-          error_message: row.errorMessage ?? null
-        })))}::jsonb) as incoming(
-          id uuid,
-          status text,
-          exclusion_reasons text[],
-          error_message text
-        )
-        where raw.id = incoming.id
-      `;
-    }
+  async markRawEvents(rows: RawStatusUpdateRow[]): Promise<RawStatusUpdateStats> {
+    return this.markRawRows("gamma_raw_events", rows);
   }
 
-  async markRawMarkets(rows: Array<{
-    id: string;
-    status: "normalized" | "excluded" | "failed";
-    exclusionReasons?: string[];
-    errorMessage?: string | null;
-  }>) {
-    for (const batch of chunked(rows)) {
-      if (batch.length === 0) continue;
-      await this.sql`
-        update gamma_raw_markets raw set
-          normalization_status = incoming.status,
-          exclusion_reasons = incoming.exclusion_reasons,
-          error_message = incoming.error_message,
-          normalized_at = now()
-        from jsonb_to_recordset(${this.sql.json(batch.map((row) => ({
-          id: row.id,
-          status: row.status,
-          exclusion_reasons: row.exclusionReasons ?? [],
-          error_message: row.errorMessage ?? null
-        })))}::jsonb) as incoming(
-          id uuid,
-          status text,
-          exclusion_reasons text[],
-          error_message text
-        )
-        where raw.id = incoming.id
-      `;
+  async markRawMarkets(rows: RawStatusUpdateRow[]): Promise<RawStatusUpdateStats> {
+    return this.markRawRows("gamma_raw_markets", rows);
+  }
+
+  async markRawEventsByExternalId(batchId: string, rows: RawEventStatusUpdateByExternalIdRow[]): Promise<RawStatusUpdateStats> {
+    return this.markRawRowsByExternalId("gamma_raw_events", batchId, rows);
+  }
+
+  async markRawMarketsByExternalId(batchId: string, rows: RawMarketStatusUpdateByExternalIdRow[]): Promise<RawStatusUpdateStats> {
+    return this.markRawRowsByExternalId("gamma_raw_markets", batchId, rows);
+  }
+
+  private async markRawRows(tableName: "gamma_raw_events" | "gamma_raw_markets", rows: RawStatusUpdateRow[]): Promise<RawStatusUpdateStats> {
+    const groups = new Map<string, {
+      status: RawStatusUpdateRow["status"];
+      exclusionReasons: string[];
+      errorMessage: string | null;
+      ids: string[];
+    }>();
+    let failedRows = 0;
+
+    for (const row of rows) {
+      const exclusionReasons = row.exclusionReasons ?? [];
+      const errorMessage = row.errorMessage ?? null;
+      const key = JSON.stringify([row.status, exclusionReasons, errorMessage]);
+      const group = groups.get(key) ?? {
+        status: row.status,
+        exclusionReasons,
+        errorMessage,
+        ids: []
+      };
+      group.ids.push(row.id);
+      groups.set(key, group);
+      if (row.status === "failed") failedRows += 1;
     }
+
+    let statements = 0;
+    const updateTable = tableName === "gamma_raw_events" ? this.sql`gamma_raw_events` : this.sql`gamma_raw_markets`;
+    for (const group of groups.values()) {
+      for (const ids of chunked(group.ids, this.statusUpdateBatchSize)) {
+        if (ids.length === 0) continue;
+        statements += 1;
+        await this.sql`
+          update ${updateTable} set
+            normalization_status = ${group.status},
+            exclusion_reasons = ${group.exclusionReasons},
+            error_message = ${group.errorMessage},
+            normalized_at = now()
+          where id in ${this.sql(ids)}
+        `;
+      }
+    }
+
+    return {
+      rowsUpdated: rows.length,
+      skippedRows: 0,
+      failedRows,
+      groups: groups.size,
+      statements,
+      batchSize: this.statusUpdateBatchSize,
+      mode: "grouped-bulk"
+    };
+  }
+
+  private async markRawRowsByExternalId(
+    tableName: "gamma_raw_events" | "gamma_raw_markets",
+    batchId: string,
+    rows: Array<RawEventStatusUpdateByExternalIdRow | RawMarketStatusUpdateByExternalIdRow>
+  ): Promise<RawStatusUpdateStats> {
+    const groups = new Map<string, {
+      status: RawStatusUpdateRow["status"];
+      exclusionReasons: string[];
+      errorMessage: string | null;
+      externalIds: string[];
+    }>();
+    let failedRows = 0;
+
+    for (const row of rows) {
+      const externalId = "externalEventId" in row ? row.externalEventId : row.externalMarketId;
+      const exclusionReasons = row.exclusionReasons ?? [];
+      const errorMessage = row.errorMessage ?? null;
+      const key = JSON.stringify([row.status, exclusionReasons, errorMessage]);
+      const group = groups.get(key) ?? {
+        status: row.status,
+        exclusionReasons,
+        errorMessage,
+        externalIds: []
+      };
+      group.externalIds.push(externalId);
+      groups.set(key, group);
+      if (row.status === "failed") failedRows += 1;
+    }
+
+    let statements = 0;
+    let rowsUpdated = 0;
+    const updateTable = tableName === "gamma_raw_events" ? this.sql`gamma_raw_events` : this.sql`gamma_raw_markets`;
+    const externalColumn = tableName === "gamma_raw_events" ? this.sql`external_event_id` : this.sql`external_market_id`;
+    for (const group of groups.values()) {
+      for (const externalIds of chunked(group.externalIds, this.statusUpdateBatchSize)) {
+        if (externalIds.length === 0) continue;
+        statements += 1;
+        const updated = await this.sql<{ id: string }[]>`
+          update ${updateTable} set
+            normalization_status = ${group.status},
+            exclusion_reasons = ${group.exclusionReasons},
+            error_message = ${group.errorMessage},
+            normalized_at = now()
+          where batch_id = ${batchId}
+            and ${externalColumn} in ${this.sql(externalIds)}
+          returning id
+        `;
+        rowsUpdated += updated.length;
+      }
+    }
+
+    return {
+      rowsUpdated,
+      skippedRows: Math.max(0, rows.length - rowsUpdated),
+      failedRows,
+      groups: groups.size,
+      statements,
+      batchSize: this.statusUpdateBatchSize,
+      mode: "grouped-bulk"
+    };
   }
 
   async cleanupRawStaging({

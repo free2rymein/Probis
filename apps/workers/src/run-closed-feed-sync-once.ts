@@ -18,7 +18,7 @@ const { sql, close } = createWorkerDatabase(config);
 try {
   const startedAt = Date.now();
   const client = new PolymarketClient(config);
-  const repository = new MarketRepository(sql);
+  const repository = new MarketRepository(sql, { relationshipSyncBatchSize: config.RELATIONSHIP_SYNC_BATCH_SIZE });
   const closedEvents = await client.fetchClosedEvents();
   const stats = await repository.syncClosedEvents(closedEvents);
   logger.info("closed_feed_sync.complete", { ...stats, totalDurationMs: Date.now() - startedAt });

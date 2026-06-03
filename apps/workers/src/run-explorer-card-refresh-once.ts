@@ -17,7 +17,10 @@ const { sql, close } = createWorkerDatabase(config);
 try {
   const repository = new ExplorerCardRepository(sql, config);
   const stats = await repository.refresh();
-  logger.info("explorer_cards_refresh.complete", stats);
+  logger.info("explorer_cards_refresh.complete", {
+    ...stats,
+    timingBreakdown: JSON.stringify(stats.timingBreakdown)
+  });
 } finally {
   await close();
 }

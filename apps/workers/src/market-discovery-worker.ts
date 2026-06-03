@@ -41,6 +41,7 @@ export class MarketDiscoveryWorker {
       fetchedEvents: rawEvents.length,
       processedEvents: eventStats.events,
       processedMarkets: eventStats.markets,
+      persistenceTimings: JSON.stringify(eventStats.timings),
       durationMs: Date.now() - persistenceStartedAt
     });
     const closedFeedStats = await this.repository.syncClosedEvents(closedEvents);
@@ -80,6 +81,7 @@ export class MarketDiscoveryWorker {
       fetchDurationMs,
       normalizationDurationMs,
       persistenceDurationMs,
+      persistenceTimings: JSON.stringify(eventStats.timings),
       guardrailDurationMs,
       openFeedEventsStamped: guardrailStats.eventsStamped,
       openFeedFinalEventsClosed: guardrailStats.finalEventsClosed,

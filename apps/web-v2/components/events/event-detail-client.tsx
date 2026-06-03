@@ -9,15 +9,24 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { explorerApi } from "@/lib/api";
 import { formatCompactCurrency, formatDate, formatPrice, formatProbability, formatProbabilityDelta, formatTimestamp } from "@/lib/format";
 
-export function EventDetailClient({ id }: { id: string }) {
-  const [event, setEvent] = useState<EventDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+export function EventDetailClient({ id, initialEvent = null }: { id: string; initialEvent?: EventDetail | null }) {
+  const hasInitialEvent = initialEvent?.id === id;
+  const [event, setEvent] = useState<EventDetail | null>(hasInitialEvent ? initialEvent : null);
+  const [loading, setLoading] = useState(!hasInitialEvent);
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    if (initialEvent?.id === id) {
+      setEvent(initialEvent);
+      setLoading(false);
+      setError(false);
+      return;
+    }
+
     setLoading(true);
+    setError(false);
     void explorerApi.event(id).then(setEvent).catch(() => setError(true)).finally(() => setLoading(false));
-  }, [id]);
+  }, [id, initialEvent]);
 
   if (loading) return <DetailSkeleton />;
   if (error || !event) return <main className="min-h-screen"><AppHeader /><div className="mx-auto max-w-5xl px-4 py-16 text-center"><h1 className="text-xl font-bold">Event unavailable</h1><p className="mt-2 text-sm text-muted-foreground">This event could not be loaded from the explorer API.</p><Link href="/markets" className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-yes"><ArrowLeft size={15} /> Back to markets</Link></div></main>;

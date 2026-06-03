@@ -92,6 +92,55 @@
       "when": 1780381800000,
       "tag": "0013_probis2_explorer_card_query_performance",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1780385400000,
+      "tag": "0014_probis2_staging_read_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1780389000000,
+      "tag": "0015_probis2_staging_read_id_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1780392600000,
+      "tag": "0016_probis2_sp_normalization_prototype",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1780396200000,
+      "tag": "0017_probis2_gamma_category_mapping",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1780399800000,
+      "tag": "0018_probis2_sp_category_inherited_tags",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1780403400000,
+      "tag": "0019_probis2_gamma_category_mapping_priorities",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1780407000000,
+      "tag": "0020_probis2_gamma_category_tag_label_tuning",
+      "breakpoints": true
     }
   ]
 }
