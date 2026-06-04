@@ -71,6 +71,10 @@ PROBIS_DEV_RESET_CONFIRM=RESET_PROBIS2_EXPLORER_DATA corepack pnpm --filter @pro
 corepack pnpm --filter @probis/workers run pipeline:once
 ```
 
+`pipeline:once` defaults to stored-procedure normalization. The older
+TypeScript `staging-db` and `memory` normalization sources remain available for
+debugging and parity checks.
+
 If the API needs to remain available while debugging read-model data, force the
 legacy dynamic query path:
 

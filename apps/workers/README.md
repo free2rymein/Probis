@@ -114,6 +114,23 @@ If `explorer_event_cards` is empty or stale, rebuild the full pipeline:
 corepack pnpm --filter @probis/workers run pipeline:once
 ```
 
+The recommended full-pipeline normalization path is the database stored
+procedure. It stages open and closed Gamma event feeds, normalizes the open
+feed into core explorer tables, reconciles closed-feed lifecycle state, then
+refreshes `explorer_event_cards`. The TypeScript `staging-db` and `memory`
+paths remain available for debugging and parity checks:
+
+```env
+PIPELINE_NORMALIZATION_SOURCE=stored-procedure
+```
+
+Per-event Gamma detail reconciliation remains a separate fallback worker for
+edge cases not proven by the staged closed feed:
+
+```bash
+corepack pnpm --filter @probis/workers run lifecycle:reconcile
+```
+
 Check basic API and database health:
 
 ```bash

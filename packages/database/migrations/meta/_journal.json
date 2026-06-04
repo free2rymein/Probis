@@ -155,6 +155,20 @@
       "when": 1780414200000,
       "tag": "0022_probis2_sp_category_parity_tuning",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1780417800000,
+      "tag": "0023_probis2_sp_tag_relationship_parity",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1780421400000,
+      "tag": "0024_probis2_sp_closed_lifecycle_reconciliation",
+      "breakpoints": true
     }
   ]
 }

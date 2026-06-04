@@ -45,6 +45,27 @@ type StoredProcedureSummary = {
   outcomes_upserted?: number;
   event_markets_upserted?: number;
   market_categories_upserted?: number;
+  event_tags_upserted?: number;
+  market_tags_upserted?: number;
+  duration_ms?: number;
+  limitation_notes?: string[];
+};
+
+type StoredProcedureClosedLifecycleSummary = {
+  closed_events_seen?: number;
+  closed_markets_seen?: number;
+  events_matched?: number;
+  markets_matched?: number;
+  events_closed?: number;
+  events_archived?: number;
+  markets_closed?: number;
+  markets_archived?: number;
+  markets_resolved?: number;
+  markets_automatically_resolved?: number;
+  markets_final_period_ft?: number;
+  markets_finished_timestamp?: number;
+  markets_closed_time_set?: number;
+  markets_lifecycle_updated?: number;
   duration_ms?: number;
   limitation_notes?: string[];
 };
@@ -229,27 +250,73 @@ try {
   });
   let normalization: StagingNormalizationStats;
   if (config.PIPELINE_NORMALIZATION_SOURCE === "stored-procedure") {
-    const [procedureResult] = await sql<{ summary: StoredProcedureSummary }[]>`
+    const [openProcedureResult] = await sql<{ summary: StoredProcedureSummary }[]>`
       select probis2_normalize_gamma_open_batch_prototype(${openFeed.batchId}) as summary
     `;
-    const summary = procedureResult?.summary;
-    if (!summary) throw new Error("Stored-procedure normalization returned no summary");
+    const openSummary = openProcedureResult?.summary;
+    if (!openSummary) throw new Error("Stored-procedure open normalization returned no summary");
+    logger.info("full_pipeline.stored_procedure_open.complete", {
+      batchId: openFeed.batchId,
+      eventsSeen: openSummary.events_seen,
+      eventsUpserted: openSummary.events_upserted,
+      eventsExcluded: openSummary.events_excluded,
+      marketsSeen: openSummary.markets_seen,
+      marketsUpserted: openSummary.markets_upserted,
+      marketsExcluded: openSummary.markets_excluded,
+      outcomesUpserted: openSummary.outcomes_upserted,
+      eventMarketsUpserted: openSummary.event_markets_upserted,
+      marketCategoriesUpserted: openSummary.market_categories_upserted,
+      eventTagsUpserted: openSummary.event_tags_upserted,
+      marketTagsUpserted: openSummary.market_tags_upserted,
+      durationMs: openSummary.duration_ms,
+      limitationNotes: JSON.stringify(openSummary.limitation_notes ?? [])
+    });
+
+    const [closedProcedureResult] = await sql<{ summary: StoredProcedureClosedLifecycleSummary }[]>`
+      select probis2_reconcile_gamma_closed_batch_prototype(${closedFeed.batchId}) as summary
+    `;
+    const closedSummary = closedProcedureResult?.summary;
+    if (!closedSummary) throw new Error("Stored-procedure closed lifecycle reconciliation returned no summary");
+    logger.info("full_pipeline.stored_procedure_closed_lifecycle.complete", {
+      batchId: closedFeed.batchId,
+      closedEventsSeen: closedSummary.closed_events_seen,
+      closedMarketsSeen: closedSummary.closed_markets_seen,
+      eventsMatched: closedSummary.events_matched,
+      marketsMatched: closedSummary.markets_matched,
+      eventsClosed: closedSummary.events_closed,
+      eventsArchived: closedSummary.events_archived,
+      marketsClosed: closedSummary.markets_closed,
+      marketsArchived: closedSummary.markets_archived,
+      marketsResolved: closedSummary.markets_resolved,
+      marketsAutomaticallyResolved: closedSummary.markets_automatically_resolved,
+      marketsFinalPeriodFt: closedSummary.markets_final_period_ft,
+      marketsFinishedTimestamp: closedSummary.markets_finished_timestamp,
+      marketsClosedTimeSet: closedSummary.markets_closed_time_set,
+      marketsLifecycleUpdated: closedSummary.markets_lifecycle_updated,
+      durationMs: closedSummary.duration_ms,
+      limitationNotes: JSON.stringify(closedSummary.limitation_notes ?? [])
+    });
+
     normalization = {
       batchId: openFeed.batchId,
       fetchedRawMarketCount: openFeed.marketsFetched,
       insertedRawEventRows: openFeed.rawEvents.inserted,
       insertedRawMarketRows: openFeed.rawMarkets.inserted,
       skippedOrDuplicateRawMarketCount: Math.max(0, openFeed.marketsFetched - openFeed.rawMarkets.inserted),
-      normalizedEvents: Number(summary.events_upserted ?? 0),
-      normalizedMarkets: Number(summary.markets_upserted ?? 0),
-      excludedEvents: Number(summary.events_excluded ?? 0),
-      excludedMarkets: Number(summary.markets_excluded ?? 0),
+      normalizedEvents: Number(openSummary.events_upserted ?? 0),
+      normalizedMarkets: Number(openSummary.markets_upserted ?? 0),
+      excludedEvents: Number(openSummary.events_excluded ?? 0),
+      excludedMarkets: Number(openSummary.markets_excluded ?? 0),
       failedRows: 0,
-      durationMs: Number(summary.duration_ms ?? 0),
+      durationMs: Number(openSummary.duration_ms ?? 0) + Number(closedSummary.duration_ms ?? 0),
       timingBreakdown: {
         normalizationSource: "stored-procedure",
-        storedProcedureSummary: summary,
-        limitationNotes: summary.limitation_notes ?? []
+        storedProcedureOpenSummary: openSummary,
+        storedProcedureClosedLifecycleSummary: closedSummary,
+        limitationNotes: [
+          ...(openSummary.limitation_notes ?? []),
+          ...(closedSummary.limitation_notes ?? [])
+        ]
       }
     };
   } else if (config.PIPELINE_NORMALIZATION_SOURCE === "memory") {
@@ -323,6 +390,11 @@ try {
     normalizedMarkets: normalization.normalizedMarkets,
     excludedEvents: normalization.excludedEvents,
     excludedMarkets: normalization.excludedMarkets,
+    closedEventsSeen: (normalization.timingBreakdown.storedProcedureClosedLifecycleSummary as StoredProcedureClosedLifecycleSummary | undefined)?.closed_events_seen,
+    closedMarketsSeen: (normalization.timingBreakdown.storedProcedureClosedLifecycleSummary as StoredProcedureClosedLifecycleSummary | undefined)?.closed_markets_seen,
+    closedEventsMatched: (normalization.timingBreakdown.storedProcedureClosedLifecycleSummary as StoredProcedureClosedLifecycleSummary | undefined)?.events_matched,
+    closedMarketsMatched: (normalization.timingBreakdown.storedProcedureClosedLifecycleSummary as StoredProcedureClosedLifecycleSummary | undefined)?.markets_matched,
+    closedMarketsLifecycleUpdated: (normalization.timingBreakdown.storedProcedureClosedLifecycleSummary as StoredProcedureClosedLifecycleSummary | undefined)?.markets_lifecycle_updated,
     cardsBuilt: cards.cardsBuilt,
     visibleCards: cards.visibleCards,
     cleanupMode,

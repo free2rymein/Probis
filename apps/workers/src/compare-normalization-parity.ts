@@ -64,6 +64,17 @@ type OutcomeRow = {
   rank: number;
 };
 
+type EventTagRow = {
+  externalEventId: string;
+  tagSlug: string;
+};
+
+type MarketTagRow = {
+  externalMarketId: string;
+  tagSlug: string;
+  source: string;
+};
+
 type SpEventRow = TsEventRow;
 type SpMarketRow = TsMarketRow;
 
@@ -289,7 +300,22 @@ const normalizeTypescript = (events: GammaEvent[]) => {
     })))
   );
 
-  return { eventRows, marketRows, outcomeRows, exclusionCounts };
+  const eventTagRows: EventTagRow[] = normalizedEvents.flatMap((event) =>
+    event.tags.map((tag) => ({
+      externalEventId: event.externalEventId,
+      tagSlug: tag.slug
+    }))
+  );
+
+  const marketTagRows: MarketTagRow[] = normalizedEvents.flatMap((event) =>
+    event.markets.flatMap((market) => market.tags.map((tag) => ({
+      externalMarketId: market.externalMarketId,
+      tagSlug: tag.slug,
+      source: market.categorySource
+    })))
+  );
+
+  return { eventRows, marketRows, outcomeRows, eventTagRows, marketTagRows, exclusionCounts };
 };
 
 type StoredProcedureSnapshot = {
@@ -297,6 +323,8 @@ type StoredProcedureSnapshot = {
   eventRows: SpEventRow[];
   marketRows: SpMarketRow[];
   outcomeRows: OutcomeRow[];
+  eventTagRows: EventTagRow[];
+  marketTagRows: MarketTagRow[];
   rawMarketStatuses: SpRawMarketStatus[];
   eventMarketCount: number;
   marketCategoryCount: number;
@@ -444,6 +472,22 @@ class RollbackWithSnapshot extends Error {
 const snapshotStoredProcedureOutput = async (sql: postgres.Sql, batchId: string) => {
   try {
     await sql.begin(async (transaction) => {
+      await transaction`
+        delete from event_tags event_tag
+        using gamma_raw_events raw, events event
+        where raw.batch_id = ${batchId}
+          and event.external_event_id = raw.external_event_id
+          and event_tag.event_id = event.id
+      `;
+
+      await transaction`
+        delete from market_tags market_tag
+        using gamma_raw_markets raw, markets market
+        where raw.batch_id = ${batchId}
+          and market.external_market_id = raw.external_market_id
+          and market_tag.market_id = market.id
+      `;
+
       const [procedureResult] = await transaction<{ summary: unknown }[]>`
         select probis2_normalize_gamma_open_batch_prototype(${batchId}) as summary
       `;
@@ -507,6 +551,33 @@ const snapshotStoredProcedureOutput = async (sql: postgres.Sql, batchId: string)
         order by m.external_market_id, o.rank, o.outcome_name
       `;
 
+      const eventTagRows = await transaction<EventTagRow[]>`
+        select
+          e.external_event_id as "externalEventId",
+          tag.slug as "tagSlug"
+        from gamma_raw_events raw
+        join events e on e.external_event_id = raw.external_event_id
+        join event_tags event_tag on event_tag.event_id = e.id
+        join venue_tags tag on tag.id = event_tag.tag_id
+        where raw.batch_id = ${batchId}
+          and raw.normalization_status = 'normalized'
+        order by e.external_event_id, tag.slug
+      `;
+
+      const marketTagRows = await transaction<MarketTagRow[]>`
+        select
+          m.external_market_id as "externalMarketId",
+          tag.slug as "tagSlug",
+          market_tag.source
+        from gamma_raw_markets raw
+        join markets m on m.external_market_id = raw.external_market_id
+        join market_tags market_tag on market_tag.market_id = m.id
+        join venue_tags tag on tag.id = market_tag.tag_id
+        where raw.batch_id = ${batchId}
+          and raw.normalization_status = 'normalized'
+        order by m.external_market_id, tag.slug, market_tag.source
+      `;
+
       const rawMarketStatuses = await transaction<SpRawMarketStatus[]>`
         select
           raw.external_market_id as "externalMarketId",
@@ -542,6 +613,8 @@ const snapshotStoredProcedureOutput = async (sql: postgres.Sql, batchId: string)
           ...row,
           probability: normalizeProbability(row.probability)
         })),
+        eventTagRows,
+        marketTagRows,
         rawMarketStatuses,
         eventMarketCount: relationshipCounts?.event_market_count ?? 0,
         marketCategoryCount: relationshipCounts?.market_category_count ?? 0
@@ -613,6 +686,26 @@ const compareOutcomes = (tsRows: OutcomeRow[], spRows: OutcomeRow[]) => {
   }
 
   return { countMismatches, fieldMismatches };
+};
+
+const compareRelationshipKeys = <T>(
+  tsRows: T[],
+  spRows: T[],
+  keyFor: (row: T) => string,
+  limit: number
+) => {
+  const tsKeys = new Set(tsRows.map(keyFor));
+  const spKeys = new Set(spRows.map(keyFor));
+  const onlyInTs = sortedDifference(tsKeys, spKeys);
+  const onlyInSp = sortedDifference(spKeys, tsKeys);
+  return {
+    tsCount: tsRows.length,
+    spCount: spRows.length,
+    onlyInTs: onlyInTs.length,
+    onlyInSp: onlyInSp.length,
+    examplesOnlyInTs: onlyInTs.slice(0, limit),
+    examplesOnlyInSp: onlyInSp.slice(0, limit)
+  };
 };
 
 const rawPayloadFields = (payload: Record<string, unknown>) => ({
@@ -977,6 +1070,18 @@ const main = async () => {
       ]));
 
     const outcomeComparison = compareOutcomes(ts.outcomeRows, sp.outcomeRows);
+    const eventTagComparison = compareRelationshipKeys(
+      ts.eventTagRows,
+      sp.eventTagRows,
+      (row) => `${row.externalEventId}:${row.tagSlug}`,
+      options.limit
+    );
+    const marketTagComparison = compareRelationshipKeys(
+      ts.marketTagRows,
+      sp.marketTagRows,
+      (row) => `${row.externalMarketId}:${row.tagSlug}:${row.source}`,
+      options.limit
+    );
     const categoryMismatches = [...eventFieldMismatches, ...marketFieldMismatches]
       .filter((mismatch) => mismatch.reason === "category_classifier_difference");
     const allReasonedMismatches = [
@@ -995,12 +1100,16 @@ const main = async () => {
         includedEvents: ts.eventRows.length,
         includedMarkets: ts.marketRows.length,
         outcomes: ts.outcomeRows.length,
+        eventTags: ts.eventTagRows.length,
+        marketTags: ts.marketTagRows.length,
         exclusionCounts: ts.exclusionCounts
       },
       storedProcedure: {
         includedEvents: sp.eventRows.length,
         includedMarkets: sp.marketRows.length,
         outcomes: sp.outcomeRows.length,
+        eventTags: sp.eventTagRows.length,
+        marketTags: sp.marketTagRows.length,
         eventMarkets: sp.eventMarketCount,
         marketCategories: sp.marketCategoryCount,
         summary: sp.summary
@@ -1015,9 +1124,9 @@ const main = async () => {
         outcomeCountMismatches: outcomeComparison.countMismatches.length,
         outcomeFieldMismatches: outcomeComparison.fieldMismatches.length,
         categoryMismatches: categoryMismatches.length,
+        eventTagRelationships: eventTagComparison,
+        marketTagRelationships: marketTagComparison,
         unsupportedAreasExcludedFromPassFail: [
-          "event_tags",
-          "market_tags",
           "closed-feed reconciliation",
           "stale cleanup"
         ],
@@ -1051,7 +1160,11 @@ const main = async () => {
         marketFieldMismatches: marketFieldMismatches.slice(0, options.limit),
         outcomeCountMismatches: outcomeComparison.countMismatches.slice(0, options.limit),
         outcomeFieldMismatches: outcomeComparison.fieldMismatches.slice(0, options.limit),
-        categoryMismatches: categoryMismatches.slice(0, options.limit)
+        categoryMismatches: categoryMismatches.slice(0, options.limit),
+        eventTagsOnlyInTs: eventTagComparison.examplesOnlyInTs,
+        eventTagsOnlyInSp: eventTagComparison.examplesOnlyInSp,
+        marketTagsOnlyInTs: marketTagComparison.examplesOnlyInTs,
+        marketTagsOnlyInSp: marketTagComparison.examplesOnlyInSp
       }
     };
 
@@ -1068,7 +1181,11 @@ const main = async () => {
       marketsOnlyInSp: report.parity.marketsOnlyInSp,
       outcomeCountMismatches: report.parity.outcomeCountMismatches,
       outcomeFieldMismatches: report.parity.outcomeFieldMismatches,
-      categoryMismatches: report.parity.categoryMismatches
+      categoryMismatches: report.parity.categoryMismatches,
+      eventTagsOnlyInTs: report.parity.eventTagRelationships.onlyInTs,
+      eventTagsOnlyInSp: report.parity.eventTagRelationships.onlyInSp,
+      marketTagsOnlyInTs: report.parity.marketTagRelationships.onlyInTs,
+      marketTagsOnlyInSp: report.parity.marketTagRelationships.onlyInSp
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   } finally {

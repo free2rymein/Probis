@@ -94,6 +94,10 @@ pipeline:
 corepack pnpm --filter @probis/workers run pipeline:once
 ```
 
+The recommended pipeline normalization source is `stored-procedure`; the
+`staging-db` and `memory` TypeScript paths remain available for debugging and
+parity checks.
+
 After a development explorer reset, run the same `pipeline:once` command to
 rebuild staging, normalized explorer tables, and the read model.
 
