@@ -6,7 +6,9 @@ import { loadWorkerConfig } from "./config/env";
 import { createWorkerDatabase } from "./services/database";
 import {
   createExclusionCounts,
+  numberOrNull,
   normalizeEvent,
+  stringArray,
   type NormalizedEvent
 } from "./services/normalization";
 import type { GammaEvent } from "./services/polymarket";
@@ -233,7 +235,9 @@ const loadHydratedEvents = async (repository: StagingRepository, batchId: string
   return {
     hydratedEvents,
     rawEventRows: rawEvents.length,
-    rawMarketRows: rawMarkets.length
+    rawMarketRows: rawMarkets.length,
+    rawEvents,
+    rawMarkets
   };
 };
 
@@ -293,9 +297,143 @@ type StoredProcedureSnapshot = {
   eventRows: SpEventRow[];
   marketRows: SpMarketRow[];
   outcomeRows: OutcomeRow[];
+  rawMarketStatuses: SpRawMarketStatus[];
   eventMarketCount: number;
   marketCategoryCount: number;
 };
+
+type SpRawMarketStatus = {
+  externalMarketId: string;
+  normalizationStatus: string;
+  exclusionReasons: string[];
+};
+
+type TsOnlyMarketDiagnostic = {
+  externalMarketId: string;
+  externalEventId: string;
+  title: string | null;
+  rawFields: Record<string, unknown>;
+  tsParsedOutcomeCount: number;
+  tsParsedOutcomes: OutcomeRow[];
+  spExclusionReason: string[] | null;
+  inferredReason: string;
+};
+
+type CategoryRuleDiagnostic = {
+  categorySlug: string;
+  categoryName: string;
+  keywords: string[];
+};
+
+type CategoryMappingRow = {
+  matchType: string;
+  matchValue: string;
+  categorySlug: string;
+  priority: number;
+};
+
+type CategoryInputDiagnostic = {
+  category: unknown;
+  sport: unknown;
+  series: unknown;
+  tags: Array<{ slug: string | null; label: string | null; name: string | null }>;
+};
+
+type CategoryClassifierDiagnostic = {
+  source: "event" | "market";
+  id: string;
+  externalEventId: string;
+  externalMarketId: string | null;
+  title: string | null;
+  question: string | null;
+  tsCategory: unknown;
+  spCategory: unknown;
+  rawEvent: CategoryInputDiagnostic | null;
+  rawMarket: CategoryInputDiagnostic | null;
+  inheritedEventTags: CategoryInputDiagnostic["tags"];
+  marketTags: CategoryInputDiagnostic["tags"];
+  tsTagMatch: { categorySlug: string; keyword: string } | null;
+  tsTextMatch: { categorySlug: string; keyword: string } | null;
+  approximateSqlMappingMatch: CategoryMappingRow | null;
+  likelyReason: string;
+};
+
+const categoryRuleDiagnostics: CategoryRuleDiagnostic[] = [
+  {
+    categorySlug: "sports",
+    categoryName: "Sports",
+    keywords: [
+      "esports",
+      "sports",
+      "nba",
+      "nfl",
+      "mlb",
+      "nhl",
+      "soccer",
+      "football",
+      "ufc",
+      "tennis",
+      "baseball",
+      "basketball",
+      "hockey",
+      "golf",
+      "cricket",
+      "formula-1",
+      "f1"
+    ]
+  },
+  {
+    categorySlug: "geopolitics",
+    categoryName: "Geopolitics",
+    keywords: ["geopolitics", "iran", "war", "conflict", "russia", "ukraine", "israel", "china", "taiwan"]
+  },
+  {
+    categorySlug: "politics",
+    categoryName: "Politics",
+    keywords: ["politics", "elections", "election", "president", "senate", "house", "congress"]
+  },
+  {
+    categorySlug: "crypto",
+    categoryName: "Crypto",
+    keywords: ["crypto", "crypto-prices", "bitcoin", "ethereum", "solana"]
+  },
+  {
+    categorySlug: "macro",
+    categoryName: "Macro",
+    keywords: [
+      "economy",
+      "fed-rates",
+      "inflation",
+      "recession",
+      "macro",
+      "interest-rates",
+      "interest rate",
+      "finance",
+      "stocks",
+      "fed"
+    ]
+  },
+  {
+    categorySlug: "technology",
+    categoryName: "Technology",
+    keywords: ["ai", "tech", "technology", "openai", "nvidia", "tesla", "spacex", "big-tech"]
+  },
+  {
+    categorySlug: "weather",
+    categoryName: "Weather",
+    keywords: ["weather", "hurricane", "temperature", "climate", "climate-science"]
+  },
+  {
+    categorySlug: "culture",
+    categoryName: "Culture",
+    keywords: ["oscars", "oscar", "music", "movies", "movie", "culture", "pop-culture", "entertainment", "celebrity"]
+  },
+  {
+    categorySlug: "science",
+    categoryName: "Science",
+    keywords: ["science", "space", "medicine"]
+  }
+];
 
 class RollbackWithSnapshot extends Error {
   constructor(readonly snapshot: StoredProcedureSnapshot) {
@@ -369,6 +507,16 @@ const snapshotStoredProcedureOutput = async (sql: postgres.Sql, batchId: string)
         order by m.external_market_id, o.rank, o.outcome_name
       `;
 
+      const rawMarketStatuses = await transaction<SpRawMarketStatus[]>`
+        select
+          raw.external_market_id as "externalMarketId",
+          raw.normalization_status as "normalizationStatus",
+          raw.exclusion_reasons as "exclusionReasons"
+        from gamma_raw_markets raw
+        where raw.batch_id = ${batchId}
+        order by raw.external_market_id
+      `;
+
       const [relationshipCounts] = await transaction<{ event_market_count: number; market_category_count: number }[]>`
         with batch_markets as (
           select m.id
@@ -394,6 +542,7 @@ const snapshotStoredProcedureOutput = async (sql: postgres.Sql, batchId: string)
           ...row,
           probability: normalizeProbability(row.probability)
         })),
+        rawMarketStatuses,
         eventMarketCount: relationshipCounts?.event_market_count ?? 0,
         marketCategoryCount: relationshipCounts?.market_category_count ?? 0
       };
@@ -466,6 +615,269 @@ const compareOutcomes = (tsRows: OutcomeRow[], spRows: OutcomeRow[]) => {
   return { countMismatches, fieldMismatches };
 };
 
+const rawPayloadFields = (payload: Record<string, unknown>) => ({
+  outcomes: payload.outcomes,
+  outcomePrices: payload.outcomePrices,
+  clobTokenIds: payload.clobTokenIds,
+  tokenIds: payload.tokenIds,
+  tokens: payload.tokens,
+  active: payload.active,
+  closed: payload.closed,
+  archived: payload.archived,
+  acceptingOrders: payload.acceptingOrders,
+  accepting_orders: payload.accepting_orders,
+  enableOrderBook: payload.enableOrderBook,
+  enable_order_book: payload.enable_order_book,
+  endDate: payload.endDate,
+  end_date: payload.end_date,
+  endDateIso: payload.endDateIso,
+  resolutionDate: payload.resolutionDate,
+  resolved: payload.resolved,
+  automaticallyResolved: payload.automaticallyResolved,
+  automatically_resolved: payload.automatically_resolved,
+  closedTime: payload.closedTime,
+  closed_time: payload.closed_time,
+  period: payload.period,
+  finishedTimestamp: payload.finishedTimestamp,
+  finished_timestamp: payload.finished_timestamp,
+  groupItemTitle: payload.groupItemTitle,
+  sportsMarketType: payload.sportsMarketType,
+  gameStartTime: payload.gameStartTime,
+  umaResolutionStatus: payload.umaResolutionStatus,
+  umaResolutionStatuses: payload.umaResolutionStatuses
+});
+
+const tokenOutcomeLabels = (payload: Record<string, unknown>) =>
+  Array.isArray(payload.tokens)
+    ? payload.tokens.map((token) => {
+      if (!token || typeof token !== "object") return "";
+      const row = token as Record<string, unknown>;
+      return String(row.outcome ?? row.name ?? row.label ?? "");
+    })
+    : [];
+
+const tokenPrices = (payload: Record<string, unknown>) =>
+  Array.isArray(payload.tokens)
+    ? payload.tokens.map((token) => {
+      if (!token || typeof token !== "object") return undefined;
+      return (token as Record<string, unknown>).price;
+    })
+    : [];
+
+const inferTsOnlyMarketReason = (payload: Record<string, unknown>) => {
+  const labels = stringArray(payload.outcomes as string | string[] | Array<string | number> | undefined);
+  const prices = stringArray(payload.outcomePrices as string | string[] | Array<string | number> | undefined);
+  const tokenLabels = tokenOutcomeLabels(payload);
+  const tokenPriceValues = tokenPrices(payload);
+  const outcomeLabels = labels.length > 0 ? labels : tokenLabels;
+  const normalizedPrices = outcomeLabels.map((_, rank) => numberOrNull(prices[rank] ?? tokenPriceValues[rank]));
+  const title = String(payload.question ?? payload.title ?? "").toLowerCase();
+  const groupItemTitle = String(payload.groupItemTitle ?? "").toLowerCase();
+  const sportsMarketType = String(payload.sportsMarketType ?? "").toLowerCase();
+
+  if (labels.length === 0 && tokenLabels.length > 0) return "token_outcome_fallback_missing";
+  if (normalizedPrices.every((price) => price === null) && tokenPriceValues.some((price) => numberOrNull(price) !== null)) {
+    return "token_price_fallback_missing";
+  }
+  if (prices.length !== outcomeLabels.length && normalizedPrices.some((price) => price !== null)) return "null_price_handling";
+  if (title.includes("completed match") || groupItemTitle.includes("completed match") || sportsMarketType.includes("completed_match")) {
+    return "lifecycle_check_difference";
+  }
+  if (payload.acceptingOrders !== true || payload.enableOrderBook !== true) return "orderbook_accepting_orders_check";
+  if (payload.active !== true || payload.closed !== false || payload.archived !== false) return "lifecycle_check_difference";
+  return "unknown";
+};
+
+const tsOnlyMarketDiagnostics = (
+  marketIds: string[],
+  rawMarkets: RawStagedMarket[],
+  tsOutcomeRows: OutcomeRow[],
+  rawStatuses: SpRawMarketStatus[],
+  limit: number
+): TsOnlyMarketDiagnostic[] => {
+  const rawByMarketId = mapBy(rawMarkets, (row) => row.externalMarketId);
+  const tsOutcomesByMarketId = groupBy(tsOutcomeRows, (row) => row.externalMarketId);
+  const statusesByMarketId = mapBy(rawStatuses, (row) => row.externalMarketId);
+
+  return marketIds.slice(0, limit).map((externalMarketId) => {
+    const raw = rawByMarketId.get(externalMarketId);
+    const payload = (raw?.payload ?? {}) as Record<string, unknown>;
+    const tsOutcomes = tsOutcomesByMarketId.get(externalMarketId) ?? [];
+    return {
+      externalMarketId,
+      externalEventId: raw?.externalEventId ?? "",
+      title: String(payload.question ?? payload.title ?? "") || null,
+      rawFields: rawPayloadFields(payload),
+      tsParsedOutcomeCount: tsOutcomes.length,
+      tsParsedOutcomes: tsOutcomes,
+      spExclusionReason: statusesByMarketId.get(externalMarketId)?.exclusionReasons ?? null,
+      inferredReason: inferTsOnlyMarketReason(payload)
+    };
+  });
+};
+
+const categoryTags = (payload: Record<string, unknown> | null | undefined): CategoryInputDiagnostic["tags"] => {
+  const tags = payload?.tags;
+  if (!Array.isArray(tags)) return [];
+  return tags
+    .filter((tag): tag is Record<string, unknown> => Boolean(tag) && typeof tag === "object")
+    .map((tag) => ({
+      slug: typeof tag.slug === "string" ? tag.slug : null,
+      label: typeof tag.label === "string" ? tag.label : null,
+      name: typeof tag.name === "string" ? tag.name : null
+    }));
+};
+
+const categoryInput = (payload: Record<string, unknown> | null | undefined): CategoryInputDiagnostic | null => {
+  if (!payload) return null;
+  return {
+    category: payload.category,
+    sport: payload.sport,
+    series: payload.series,
+    tags: categoryTags(payload)
+  };
+};
+
+const tagText = (tags: CategoryInputDiagnostic["tags"]) =>
+  tags.flatMap((tag) => [tag.slug, tag.label ?? tag.name].filter(Boolean)).join(" ");
+
+const textParts = (...parts: unknown[]) =>
+  parts
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join(" ");
+
+const matchesCategoryKeyword = (value: string, keyword: string) =>
+  new RegExp(`(^|[^a-z0-9])${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, "i").test(value);
+
+const firstCategoryKeywordMatch = (value: string) => {
+  for (const rule of categoryRuleDiagnostics) {
+    const keyword = rule.keywords.find((candidate) => matchesCategoryKeyword(value, candidate));
+    if (keyword) return { categorySlug: rule.categorySlug, keyword };
+  }
+  return null;
+};
+
+const slugifyDiagnosticValue = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const approximateSqlMappingMatch = (
+  mappingRows: CategoryMappingRow[],
+  payload: Record<string, unknown> | null | undefined,
+  tags: CategoryInputDiagnostic["tags"],
+  fallbackText: string
+) => {
+  const exactCandidates: Array<{ matchType: string; value: string }> = [];
+  const addExact = (matchType: string, value: unknown, slugify = true) => {
+    if (typeof value !== "string" || value.trim().length === 0) return;
+    exactCandidates.push({ matchType, value: slugify ? slugifyDiagnosticValue(value) : value.trim().toLowerCase() });
+  };
+
+  addExact("category_slug", payload?.category);
+  addExact("category_label", payload?.category, false);
+  addExact("sport", payload?.sport);
+  addExact("series", payload?.series);
+  for (const tag of tags) {
+    addExact("tag_slug", tag.slug);
+    addExact("tag_label", tag.label ?? tag.name, false);
+  }
+
+  const matches = mappingRows.filter((row) => {
+    const rowValue = row.matchValue.trim().toLowerCase();
+    if (row.matchType === "keyword") return matchesCategoryKeyword(fallbackText, row.matchValue);
+    return exactCandidates.some((candidate) =>
+      candidate.matchType === row.matchType
+      && (candidate.value === rowValue || slugifyDiagnosticValue(candidate.value) === rowValue)
+    );
+  });
+
+  return matches.sort((left, right) =>
+    left.priority - right.priority
+    || right.matchValue.length - left.matchValue.length
+    || left.categorySlug.localeCompare(right.categorySlug)
+  )[0] ?? null;
+};
+
+const inferCategoryMismatchReason = (
+  tsCategory: unknown,
+  spCategory: unknown,
+  tsTagMatch: { categorySlug: string; keyword: string } | null,
+  tsTextMatch: { categorySlug: string; keyword: string } | null,
+  sqlMatch: CategoryMappingRow | null
+) => {
+  const tsSlug = String(tsCategory ?? "").toLowerCase();
+  const spSlug = String(spCategory ?? "").toLowerCase();
+  if (!sqlMatch && !tsTagMatch && !tsTextMatch) return "unknown";
+  if (sqlMatch && sqlMatch.matchType !== "keyword" && sqlMatch.categorySlug === spSlug) return "native_or_exact_mapping_precedence";
+  if (sqlMatch && sqlMatch.categorySlug === spSlug && (tsTagMatch || tsTextMatch)) return "sql_mapping_priority_difference";
+  if ((tsTagMatch ?? tsTextMatch)?.categorySlug === tsSlug && spSlug === "other") return "missing_or_disabled_sql_keyword";
+  if (sqlMatch && sqlMatch.matchType === "keyword" && !categoryRuleDiagnostics.some((rule) =>
+    rule.categorySlug === sqlMatch.categorySlug && rule.keywords.includes(sqlMatch.matchValue.toLowerCase())
+  )) {
+    return "extra_sql_keyword_not_in_typescript_rules";
+  }
+  return "category_classifier_difference";
+};
+
+const categoryMismatchDiagnostics = (
+  mismatches: FieldMismatch[],
+  rawEvents: Array<{ externalEventId: string; payload: GammaEvent }>,
+  rawMarkets: RawStagedMarket[],
+  tsMarketsById: Map<string, TsMarketRow>,
+  spMarketsById: Map<string, SpMarketRow>,
+  mappingRows: CategoryMappingRow[],
+  limit: number
+): CategoryClassifierDiagnostic[] => {
+  const rawEventById = mapBy(rawEvents, (row) => row.externalEventId);
+  const rawMarketById = mapBy(rawMarkets, (row) => row.externalMarketId);
+
+  return mismatches.slice(0, limit).map((mismatch) => {
+    const tsMarket = tsMarketsById.get(mismatch.id);
+    const spMarket = spMarketsById.get(mismatch.id);
+    const source = tsMarket || spMarket ? "market" : "event";
+    const externalEventId = tsMarket?.externalEventId ?? spMarket?.externalEventId ?? mismatch.id;
+    const rawEventPayload = rawEventById.get(externalEventId)?.payload as Record<string, unknown> | undefined;
+    const rawMarketPayload = source === "market" ? rawMarketById.get(mismatch.id)?.payload as Record<string, unknown> | undefined : undefined;
+    const inheritedEventTags = categoryTags(rawEventPayload);
+    const marketTags = categoryTags(rawMarketPayload);
+    const combinedTags = source === "market" ? [...inheritedEventTags, ...marketTags] : inheritedEventTags;
+    const fallbackText = source === "market"
+      ? textParts(rawMarketPayload?.category, rawMarketPayload?.question, rawMarketPayload?.title, rawMarketPayload?.description)
+      : textParts(rawEventPayload?.title, rawEventPayload?.description);
+    const tsTagMatch = firstCategoryKeywordMatch(tagText(combinedTags));
+    const tsTextMatch = tsTagMatch ? null : firstCategoryKeywordMatch(fallbackText);
+    const approximateSqlMatch = approximateSqlMappingMatch(
+      mappingRows,
+      source === "market" ? rawMarketPayload : rawEventPayload,
+      combinedTags,
+      fallbackText
+    );
+
+    return {
+      source,
+      id: mismatch.id,
+      externalEventId,
+      externalMarketId: source === "market" ? mismatch.id : null,
+      title: String(rawMarketPayload?.title ?? rawMarketPayload?.question ?? rawEventPayload?.title ?? "") || null,
+      question: String(rawMarketPayload?.question ?? "") || null,
+      tsCategory: mismatch.ts,
+      spCategory: mismatch.sp,
+      rawEvent: categoryInput(rawEventPayload),
+      rawMarket: categoryInput(rawMarketPayload),
+      inheritedEventTags,
+      marketTags,
+      tsTagMatch,
+      tsTextMatch,
+      approximateSqlMappingMatch: approximateSqlMatch,
+      likelyReason: inferCategoryMismatchReason(mismatch.ts, mismatch.sp, tsTagMatch, tsTextMatch, approximateSqlMatch)
+    };
+  });
+};
+
 const topReasons = (mismatches: Array<{ reason: string }>) =>
   [...groupBy(mismatches, (mismatch) => mismatch.reason)]
     .map(([reason, rows]) => ({ reason, count: rows.length }))
@@ -503,7 +915,18 @@ const main = async () => {
       stagedFreshBatch = true;
     }
 
-    const { hydratedEvents, rawEventRows, rawMarketRows } = await loadHydratedEvents(repository, batchId);
+    const { hydratedEvents, rawEventRows, rawMarketRows, rawEvents, rawMarkets } = await loadHydratedEvents(repository, batchId);
+    const categoryMappingRows = await sql<CategoryMappingRow[]>`
+      select
+        match_type as "matchType",
+        match_value as "matchValue",
+        category_slug as "categorySlug",
+        priority
+      from gamma_tag_category_map
+      where source = 'gamma'
+        and is_active = true
+      order by priority, match_type, match_value
+    `;
     const ts = normalizeTypescript(hydratedEvents);
     const sp = await snapshotStoredProcedureOutput(sql, batchId);
 
@@ -600,6 +1023,24 @@ const main = async () => {
         ],
         reasonCounts: topReasons(allReasonedMismatches),
         categoryMismatchMatrix: categoryMismatchMatrix(categoryMismatches)
+      },
+      diagnostics: {
+        tsOnlyMarkets: tsOnlyMarketDiagnostics(
+          marketsOnlyInTs,
+          rawMarkets,
+          ts.outcomeRows,
+          sp.rawMarketStatuses,
+          options.limit
+        ),
+        categoryMismatches: categoryMismatchDiagnostics(
+          categoryMismatches,
+          rawEvents,
+          rawMarkets,
+          tsMarketsById,
+          spMarketsById,
+          categoryMappingRows,
+          options.limit
+        )
       },
       examples: {
         eventsOnlyInTs: eventsOnlyInTs.slice(0, options.limit),

@@ -141,6 +141,20 @@
       "when": 1780407000000,
       "tag": "0020_probis2_gamma_category_tag_label_tuning",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1780410600000,
+      "tag": "0021_probis2_sp_outcome_parity",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1780414200000,
+      "tag": "0022_probis2_sp_category_parity_tuning",
+      "breakpoints": true
     }
   ]
 }
